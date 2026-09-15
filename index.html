@@ -223,6 +223,25 @@ async function supaInsertQuizResult(data) {
   return !error;
 }
 
+// AURA leaderboard — every scored attempt of ONE specific mock (matched by
+// its exact test_name, the same string supaInsertQuizResult wrote), best
+// score first, ties broken by whoever finished first. Used by the "AURA"
+// button on the results screen so students can see how they rank against
+// everyone else who attempted this particular mock.
+async function supaFetchMockLeaderboard(testName, limit) {
+  try {
+    const { data, error } = await _supa
+      .from('quiz_results')
+      .select('user_id,user_name,score,total,correct,wrong,created_at')
+      .eq('test_name', testName)
+      .order('score', { ascending: false })
+      .order('created_at', { ascending: true })
+      .limit(limit || 50);
+    if (error) return [];
+    return data || [];
+  } catch (e) { return []; }
+}
+
 // ============================================================
 //  CLASS LABELS — shared between the main site and the admin panel
 // ============================================================
@@ -10083,6 +10102,55 @@ updateAuthUI = function() {
   .qz-badge.correct { background: #1a9d5c22; color: #1a9d5c; }
   .qz-badge.wrong { background: #e5484d22; color: #e5484d; }
   .qz-badge.skipped { background: #9aa8c222; color: #6b7a94; }
+
+  /* ---------- AURA button (on results screen) ---------- */
+  .qz-aura-btn { flex: 0 0 auto; padding: 14px 24px; background: #14161c; color: #ffe27a; box-shadow: 0 8px 20px rgba(0,0,0,0.25); }
+  .qz-aura-btn i { color: #ffb020; }
+  .qz-aura-btn:hover { background: #1f2129; }
+
+  /* ---------- AURA leaderboard overlay ---------- */
+  .qz-aura-overlay { position: fixed; inset: 0; z-index: 100020; background: #fdf6e6; display: none; flex-direction: column; overflow-y: auto; font-family: 'DM Sans', sans-serif; }
+  .qz-aura-overlay.open { display: flex; }
+  .qz-aura-overlay * { box-sizing: border-box; }
+  .qz-aura-topbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; background: #fdf6e6; border-bottom: 1px solid rgba(13,43,107,0.08); }
+  .qz-aura-back { width: 34px; height: 34px; border-radius: 50%; border: none; background: white; color: var(--navy); font-size: 14px; cursor: pointer; box-shadow: 0 2px 8px rgba(13,43,107,0.12); flex-shrink: 0; }
+  .qz-aura-topbar-title { font-size: 13.5px; font-weight: 800; color: var(--navy); text-transform: uppercase; letter-spacing: .5px; }
+  .qz-aura-wrap { max-width: 640px; margin: 0 auto; padding: 22px 18px 60px; width: 100%; }
+  .qz-aura-hero { text-align: center; margin-bottom: 22px; }
+  .qz-aura-eyebrow { font-size: 11.5px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 8px; }
+  .qz-aura-h2 { font-family: 'Playfair Display', serif; font-size: 22px; line-height: 1.3; font-weight: 900; color: #1a1a1a; margin: 0 0 8px; }
+  .qz-aura-h2 span { background: linear-gradient(120deg, #f0932b, #e6521f); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .qz-aura-sub { font-size: 13px; color: var(--muted); font-style: italic; }
+  .qz-aura-loading, .qz-aura-empty { text-align: center; padding: 50px 20px; color: var(--muted); font-size: 14px; }
+  .qz-aura-empty i { font-size: 30px; color: #f0c040; display: block; margin-bottom: 12px; }
+  .qz-aura-empty .small { font-size: 12px; margin-top: 4px; opacity: .8; }
+
+  .qz-aura-podium { display: flex; align-items: flex-end; justify-content: center; gap: 12px; margin-bottom: 26px; }
+  .qz-aura-p-card { flex: 1; max-width: 170px; border-radius: 16px; padding: 16px 10px 14px; text-align: center; position: relative; background: #f1f1ee; }
+  .qz-aura-p-card .qz-aura-avatar { width: 52px; height: 52px; border-radius: 50%; margin: 0 auto 10px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 15px; color: white; background: #14161c; border: 3px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+  .qz-aura-p-card .qz-aura-name { font-size: 12px; font-weight: 800; color: #1a1a1a; margin-bottom: 8px; word-break: break-word; }
+  .qz-aura-p-card .qz-aura-pts { display: inline-block; background: white; border-radius: 20px; padding: 5px 14px; font-size: 12.5px; font-weight: 800; color: #1a1a1a; }
+  .qz-aura-p-card .qz-aura-rank { position: absolute; bottom: -10px; right: 10px; font-size: 30px; font-weight: 900; color: rgba(0,0,0,0.1); font-family: 'Playfair Display', serif; }
+  .qz-aura-p-card.first { background: linear-gradient(160deg, #ffe27a, #f5b93c); padding-top: 26px; margin-bottom: 14px; order: 2; }
+  .qz-aura-p-card.first .qz-aura-avatar { width: 62px; height: 62px; font-size: 17px; box-shadow: 0 0 0 4px #f5b93c, 0 6px 16px rgba(0,0,0,0.2); }
+  .qz-aura-p-card.second { order: 1; }
+  .qz-aura-p-card.third { background: linear-gradient(160deg, #ffd9b0, #f0a15c); order: 3; }
+
+  .qz-aura-list { display: flex; flex-direction: column; gap: 10px; }
+  .qz-aura-row { display: flex; align-items: center; gap: 12px; background: white; border-radius: 12px; padding: 12px 16px; border: 1px solid rgba(13,43,107,0.06); }
+  .qz-aura-row.me { border: 1.5px solid #f0c040; background: #fff9e8; }
+  .qz-aura-row .qz-aura-rank-num { font-size: 12.5px; font-weight: 800; color: var(--royal); width: 28px; flex-shrink: 0; }
+  .qz-aura-row .qz-aura-avatar { width: 34px; height: 34px; border-radius: 50%; background: #14161c; color: white; display: flex; align-items: center; justify-content: center; font-size: 11.5px; font-weight: 800; flex-shrink: 0; }
+  .qz-aura-row .qz-aura-row-name { flex: 1; font-size: 13.5px; font-weight: 700; color: #1a1a1a; word-break: break-word; }
+  .qz-aura-row .qz-aura-row-name .you-tag { font-size: 10px; font-weight: 800; color: #b8860b; background: #f0c04033; padding: 2px 7px; border-radius: 10px; margin-left: 6px; text-transform: uppercase; letter-spacing: .3px; }
+  .qz-aura-row .qz-aura-row-pts { text-align: right; flex-shrink: 0; }
+  .qz-aura-row .qz-aura-row-pts .n { font-size: 14px; font-weight: 800; color: #1a1a1a; }
+  .qz-aura-row .qz-aura-row-pts .l { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+
+  @media (max-width: 480px) {
+    .qz-aura-p-card .qz-aura-name { font-size: 11px; }
+    .qz-aura-h2 { font-size: 19px; }
+  }
 </style>
 
 <div class="qz-overlay" id="qz-overlay" oncontextmenu="return false;">
@@ -10173,10 +10241,39 @@ updateAuthUI = function() {
     <div class="qz-results-body">
       <div class="qz-results-cta">
         <button class="qz-btn qz-btn-primary" onclick="closeQuizOverlay()"><i class="fas fa-house"></i> Back to Mocks</button>
+        <button class="qz-btn qz-aura-btn" onclick="openAuraLeaderboard()"><i class="fas fa-fire"></i> AURA</button>
       </div>
       <div class="qz-review-title">Question-by-Question Review</div>
       <div id="qz-review-list"></div>
     </div>
+  </div>
+</div>
+
+<!-- AURA leaderboard — ranks everyone who has attempted THIS SPECIFIC mock -->
+<div class="qz-aura-overlay" id="qz-aura-overlay">
+  <div class="qz-aura-topbar">
+    <button class="qz-aura-back" onclick="closeAuraLeaderboard()"><i class="fas fa-arrow-left"></i></button>
+    <div class="qz-aura-topbar-title">Mock Leaderboard</div>
+    <div style="width:34px;"></div>
+  </div>
+  <div class="qz-aura-wrap">
+    <div class="qz-aura-hero">
+      <div class="qz-aura-eyebrow" id="qz-aura-testname">Test</div>
+      <h2 class="qz-aura-h2">Who Has The Most <span>Aura</span> On This Mock?</h2>
+      <div class="qz-aura-sub">Ranked by score among everyone who has attempted this exact mock.</div>
+    </div>
+
+    <div class="qz-aura-loading" id="qz-aura-loading">
+      <i class="fas fa-circle-notch fa-spin"></i> Loading leaderboard…
+    </div>
+    <div class="qz-aura-empty" id="qz-aura-empty" style="display:none;">
+      <i class="fas fa-trophy"></i>
+      <div>No one has scored on this mock yet.</div>
+      <div class="small">Be the first name on this leaderboard!</div>
+    </div>
+
+    <div class="qz-aura-podium" id="qz-aura-podium"></div>
+    <div class="qz-aura-list" id="qz-aura-list"></div>
   </div>
 </div>
 
@@ -10523,6 +10620,95 @@ function renderQzResults(r) {
     }
     html += '</div>';
     return html;
+  }).join('');
+}
+
+/* ═══════════════════════════════════════════════════════════
+   AURA LEADERBOARD — per-mock ranking shown from the results screen
+   ═══════════════════════════════════════════════════════════ */
+function _auraInitials(name) {
+  name = (name || 'Guest').trim();
+  if (!name) return 'G';
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
+// Same string supaInsertQuizResult() writes to test_name for this mock,
+// so the leaderboard only ever shows people who attempted THIS exact mock.
+function _auraTestNameFromMeta(meta) {
+  return (meta.subject ? meta.subject + ' — ' : '') + (meta.title || 'Test');
+}
+
+async function openAuraLeaderboard() {
+  const q = window._UA_QUIZ;
+  if (!q || !q.meta) return;
+  const meta = q.meta;
+  const testName = _auraTestNameFromMeta(meta);
+
+  document.getElementById('qz-aura-testname').textContent = meta.title || testName;
+  document.getElementById('qz-aura-overlay').classList.add('open');
+  document.body.style.overflow = 'hidden';
+
+  const podiumEl = document.getElementById('qz-aura-podium');
+  const listEl = document.getElementById('qz-aura-list');
+  const emptyEl = document.getElementById('qz-aura-empty');
+  const loadingEl = document.getElementById('qz-aura-loading');
+  podiumEl.innerHTML = '';
+  listEl.innerHTML = '';
+  emptyEl.style.display = 'none';
+  loadingEl.style.display = '';
+
+  let rows = [];
+  try { rows = await supaFetchMockLeaderboard(testName, 50); } catch (e) { rows = []; }
+
+  loadingEl.style.display = 'none';
+
+  if (!rows.length) {
+    emptyEl.style.display = '';
+    return;
+  }
+
+  let myUserId = null;
+  try { const u = await supaGetUser(); myUserId = u ? u.id : null; } catch (e) {}
+
+  renderAuraLeaderboard(rows, myUserId);
+}
+
+function closeAuraLeaderboard() {
+  document.getElementById('qz-aura-overlay').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+function renderAuraLeaderboard(rows, myUserId) {
+  const podiumEl = document.getElementById('qz-aura-podium');
+  const listEl = document.getElementById('qz-aura-list');
+
+  const top3 = rows.slice(0, 3);
+  const rest = rows.slice(3);
+  const rankClass = ['first', 'second', 'third'];
+
+  podiumEl.innerHTML = top3.map(function (row, i) {
+    const name = row.user_name || 'Guest';
+    const isMe = !!myUserId && row.user_id === myUserId;
+    return '<div class="qz-aura-p-card ' + rankClass[i] + '">'
+      + '<div class="qz-aura-avatar">' + escHtml(_auraInitials(name)) + '</div>'
+      + '<div class="qz-aura-name">' + escHtml(name) + (isMe ? ' (You)' : '') + '</div>'
+      + '<div class="qz-aura-pts">' + row.score + ' AURA</div>'
+      + '<div class="qz-aura-rank">' + (i + 1) + '</div>'
+      + '</div>';
+  }).join('');
+
+  listEl.innerHTML = rest.map(function (row, i) {
+    const rank = i + 4;
+    const name = row.user_name || 'Guest';
+    const isMe = !!myUserId && row.user_id === myUserId;
+    return '<div class="qz-aura-row' + (isMe ? ' me' : '') + '">'
+      + '<div class="qz-aura-rank-num">#' + rank + '</div>'
+      + '<div class="qz-aura-avatar">' + escHtml(_auraInitials(name)) + '</div>'
+      + '<div class="qz-aura-row-name">' + escHtml(name) + (isMe ? '<span class="you-tag">You</span>' : '') + '</div>'
+      + '<div class="qz-aura-row-pts"><div class="n">' + row.score + '</div><div class="l">Aura</div></div>'
+      + '</div>';
   }).join('');
 }
 </script>

@@ -10103,48 +10103,63 @@ updateAuthUI = function() {
   .qz-badge.wrong { background: #e5484d22; color: #e5484d; }
   .qz-badge.skipped { background: #9aa8c222; color: #6b7a94; }
 
+  /* ---------- AURA motion keyframes ---------- */
+  @keyframes auraOverlayIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes auraFadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes auraPopIn { from { opacity: 0; transform: scale(.8) translateY(24px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+  @keyframes auraRowIn { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: translateX(0); } }
+  @keyframes auraCrownFloat { 0%, 100% { transform: translateY(0) rotate(-4deg); } 50% { transform: translateY(-4px) rotate(4deg); } }
+  @keyframes auraGlowPulse { 0%, 100% { box-shadow: 0 0 0 4px var(--gold), 0 6px 16px rgba(13,43,107,0.25); } 50% { box-shadow: 0 0 0 9px rgba(240,192,64,0.12), 0 6px 22px rgba(13,43,107,0.32); } }
+  @keyframes auraFlicker { 0%, 100% { transform: scale(1) rotate(0); } 50% { transform: scale(1.12) rotate(-6deg); } }
+
   /* ---------- AURA button (on results screen) ---------- */
-  .qz-aura-btn { flex: 0 0 auto; padding: 14px 24px; background: #14161c; color: #ffe27a; box-shadow: 0 8px 20px rgba(0,0,0,0.25); }
-  .qz-aura-btn i { color: #ffb020; }
-  .qz-aura-btn:hover { background: #1f2129; }
+  .qz-aura-btn { flex: 0 0 auto; padding: 14px 24px; background: linear-gradient(135deg, var(--navy), var(--royal)); color: #ffe9a8; box-shadow: 0 8px 20px var(--shadow-blue); transition: transform .25s ease, box-shadow .25s ease, background .25s ease; }
+  .qz-aura-btn i { color: var(--gold); display: inline-block; animation: auraFlicker 2s ease-in-out infinite; }
+  .qz-aura-btn:hover { background: linear-gradient(135deg, var(--royal), var(--sky)); transform: translateY(-3px); box-shadow: 0 12px 26px var(--shadow-blue); }
+  .qz-aura-btn:active { transform: translateY(-1px) scale(.98); }
 
   /* ---------- AURA leaderboard overlay ---------- */
-  .qz-aura-overlay { position: fixed; inset: 0; z-index: 100020; background: #fdf6e6; display: none; flex-direction: column; overflow-y: auto; font-family: 'DM Sans', sans-serif; }
-  .qz-aura-overlay.open { display: flex; }
+  .qz-aura-overlay { position: fixed; inset: 0; z-index: 100020; background: linear-gradient(180deg, var(--off-white) 0%, var(--light-blue) 100%); display: none; flex-direction: column; overflow-y: auto; font-family: 'DM Sans', sans-serif; }
+  .qz-aura-overlay.open { display: flex; animation: auraOverlayIn .35s ease; }
   .qz-aura-overlay * { box-sizing: border-box; }
-  .qz-aura-topbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; background: #fdf6e6; border-bottom: 1px solid rgba(13,43,107,0.08); }
-  .qz-aura-back { width: 34px; height: 34px; border-radius: 50%; border: none; background: white; color: var(--navy); font-size: 14px; cursor: pointer; box-shadow: 0 2px 8px rgba(13,43,107,0.12); flex-shrink: 0; }
+  .qz-aura-topbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; background: rgba(244,248,255,0.85); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-bottom: 1px solid rgba(13,43,107,0.08); }
+  .qz-aura-back { width: 34px; height: 34px; border-radius: 50%; border: none; background: white; color: var(--navy); font-size: 14px; cursor: pointer; box-shadow: 0 2px 8px rgba(13,43,107,0.12); flex-shrink: 0; transition: transform .2s ease, box-shadow .2s ease; }
+  .qz-aura-back:hover { transform: translateX(-3px); box-shadow: 0 4px 12px var(--shadow-blue); }
   .qz-aura-topbar-title { font-size: 13.5px; font-weight: 800; color: var(--navy); text-transform: uppercase; letter-spacing: .5px; }
   .qz-aura-wrap { max-width: 640px; margin: 0 auto; padding: 22px 18px 60px; width: 100%; }
-  .qz-aura-hero { text-align: center; margin-bottom: 22px; }
+  .qz-aura-hero { text-align: center; margin-bottom: 22px; animation: auraFadeUp .5s ease both; }
   .qz-aura-eyebrow { font-size: 11.5px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 8px; }
-  .qz-aura-h2 { font-family: 'Playfair Display', serif; font-size: 22px; line-height: 1.3; font-weight: 900; color: #1a1a1a; margin: 0 0 8px; }
-  .qz-aura-h2 span { background: linear-gradient(120deg, #f0932b, #e6521f); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .qz-aura-h2 { font-family: 'Playfair Display', serif; font-size: 22px; line-height: 1.3; font-weight: 900; color: var(--navy); margin: 0 0 8px; }
+  .qz-aura-h2 span { background: linear-gradient(120deg, var(--gold), var(--royal)); -webkit-background-clip: text; background-clip: text; color: transparent; }
   .qz-aura-sub { font-size: 13px; color: var(--muted); font-style: italic; }
-  .qz-aura-loading, .qz-aura-empty { text-align: center; padding: 50px 20px; color: var(--muted); font-size: 14px; }
-  .qz-aura-empty i { font-size: 30px; color: #f0c040; display: block; margin-bottom: 12px; }
+  .qz-aura-loading, .qz-aura-empty { text-align: center; padding: 50px 20px; color: var(--muted); font-size: 14px; animation: auraFadeUp .4s ease both; }
+  .qz-aura-loading i { color: var(--royal); }
+  .qz-aura-empty i { font-size: 30px; color: var(--gold); display: block; margin-bottom: 12px; animation: auraCrownFloat 2.4s ease-in-out infinite; }
   .qz-aura-empty .small { font-size: 12px; margin-top: 4px; opacity: .8; }
 
   .qz-aura-podium { display: flex; align-items: flex-end; justify-content: center; gap: 12px; margin-bottom: 26px; }
-  .qz-aura-p-card { flex: 1; max-width: 170px; border-radius: 16px; padding: 16px 10px 14px; text-align: center; position: relative; background: #f1f1ee; }
-  .qz-aura-p-card .qz-aura-avatar { width: 52px; height: 52px; border-radius: 50%; margin: 0 auto 10px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 15px; color: white; background: #14161c; border: 3px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
-  .qz-aura-p-card .qz-aura-name { font-size: 12px; font-weight: 800; color: #1a1a1a; margin-bottom: 8px; word-break: break-word; }
-  .qz-aura-p-card .qz-aura-pts { display: inline-block; background: white; border-radius: 20px; padding: 5px 14px; font-size: 12.5px; font-weight: 800; color: #1a1a1a; }
-  .qz-aura-p-card .qz-aura-rank { position: absolute; bottom: -10px; right: 10px; font-size: 30px; font-weight: 900; color: rgba(0,0,0,0.1); font-family: 'Playfair Display', serif; }
-  .qz-aura-p-card.first { background: linear-gradient(160deg, #ffe27a, #f5b93c); padding-top: 26px; margin-bottom: 14px; order: 2; }
-  .qz-aura-p-card.first .qz-aura-avatar { width: 62px; height: 62px; font-size: 17px; box-shadow: 0 0 0 4px #f5b93c, 0 6px 16px rgba(0,0,0,0.2); }
-  .qz-aura-p-card.second { order: 1; }
-  .qz-aura-p-card.third { background: linear-gradient(160deg, #ffd9b0, #f0a15c); order: 3; }
+  .qz-aura-p-card { flex: 1; max-width: 170px; border-radius: 16px; padding: 16px 10px 14px; text-align: center; position: relative; background: var(--light-blue); opacity: 0; animation: auraPopIn .55s cubic-bezier(.34,1.56,.64,1) forwards; transition: transform .25s ease, box-shadow .25s ease; }
+  .qz-aura-p-card:hover { transform: translateY(-6px); box-shadow: 0 10px 24px var(--shadow-blue); }
+  .qz-aura-p-card .qz-aura-avatar { width: 52px; height: 52px; border-radius: 50%; margin: 0 auto 10px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 15px; color: white; background: linear-gradient(135deg, var(--navy), var(--royal)); border: 3px solid white; box-shadow: 0 4px 12px rgba(13,43,107,0.25); }
+  .qz-aura-p-card .qz-aura-name { font-size: 12px; font-weight: 800; color: var(--navy); margin-bottom: 8px; word-break: break-word; }
+  .qz-aura-p-card .qz-aura-pts { display: inline-block; background: white; border-radius: 20px; padding: 5px 14px; font-size: 12.5px; font-weight: 800; color: var(--navy); }
+  .qz-aura-p-card .qz-aura-rank { position: absolute; bottom: -10px; right: 10px; font-size: 30px; font-weight: 900; color: rgba(13,43,107,0.12); font-family: 'Playfair Display', serif; }
+  .qz-aura-p-card.first { background: linear-gradient(160deg, #ffe9ad, var(--gold)); padding-top: 26px; margin-bottom: 14px; order: 2; }
+  .qz-aura-p-card.first .qz-aura-avatar { width: 62px; height: 62px; font-size: 17px; box-shadow: 0 0 0 4px var(--gold), 0 6px 16px rgba(13,43,107,0.25); animation: auraGlowPulse 2.2s ease-in-out infinite; }
+  .qz-aura-p-card.second { order: 1; background: var(--light-blue); }
+  .qz-aura-p-card.second .qz-aura-avatar { background: linear-gradient(135deg, var(--royal), var(--sky)); }
+  .qz-aura-p-card.third { background: linear-gradient(160deg, #e9c9a3, #c98a4d); order: 3; }
 
   .qz-aura-list { display: flex; flex-direction: column; gap: 10px; }
-  .qz-aura-row { display: flex; align-items: center; gap: 12px; background: white; border-radius: 12px; padding: 12px 16px; border: 1px solid rgba(13,43,107,0.06); }
-  .qz-aura-row.me { border: 1.5px solid #f0c040; background: #fff9e8; }
+  .qz-aura-row { display: flex; align-items: center; gap: 12px; background: white; border-radius: 12px; padding: 12px 16px; border: 1px solid rgba(13,43,107,0.06); opacity: 0; animation: auraRowIn .4s ease forwards; transition: transform .2s ease, box-shadow .2s ease; }
+  .qz-aura-row:hover { transform: translateX(4px); box-shadow: 0 4px 14px var(--shadow-blue); }
+  .qz-aura-row.me { border: 1.5px solid var(--royal); background: var(--light-blue); }
   .qz-aura-row .qz-aura-rank-num { font-size: 12.5px; font-weight: 800; color: var(--royal); width: 28px; flex-shrink: 0; }
-  .qz-aura-row .qz-aura-avatar { width: 34px; height: 34px; border-radius: 50%; background: #14161c; color: white; display: flex; align-items: center; justify-content: center; font-size: 11.5px; font-weight: 800; flex-shrink: 0; }
-  .qz-aura-row .qz-aura-row-name { flex: 1; font-size: 13.5px; font-weight: 700; color: #1a1a1a; word-break: break-word; }
-  .qz-aura-row .qz-aura-row-name .you-tag { font-size: 10px; font-weight: 800; color: #b8860b; background: #f0c04033; padding: 2px 7px; border-radius: 10px; margin-left: 6px; text-transform: uppercase; letter-spacing: .3px; }
+  .qz-aura-row .qz-aura-avatar { width: 34px; height: 34px; border-radius: 50%; background: linear-gradient(135deg, var(--navy), var(--royal)); color: white; display: flex; align-items: center; justify-content: center; font-size: 11.5px; font-weight: 800; flex-shrink: 0; }
+  .qz-aura-row .qz-aura-row-name { flex: 1; font-size: 13.5px; font-weight: 700; color: var(--text); word-break: break-word; }
+  .qz-aura-row .qz-aura-row-name .you-tag { font-size: 10px; font-weight: 800; color: var(--royal); background: rgba(26,75,189,0.12); padding: 2px 7px; border-radius: 10px; margin-left: 6px; text-transform: uppercase; letter-spacing: .3px; }
   .qz-aura-row .qz-aura-row-pts { text-align: right; flex-shrink: 0; }
-  .qz-aura-row .qz-aura-row-pts .n { font-size: 14px; font-weight: 800; color: #1a1a1a; }
+  .qz-aura-row .qz-aura-row-pts .n { font-size: 14px; font-weight: 800; color: var(--navy); }
   .qz-aura-row .qz-aura-row-pts .l { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
 
   @media (max-width: 480px) {
@@ -10691,7 +10706,8 @@ function renderAuraLeaderboard(rows, myUserId) {
   podiumEl.innerHTML = top3.map(function (row, i) {
     const name = row.user_name || 'Guest';
     const isMe = !!myUserId && row.user_id === myUserId;
-    return '<div class="qz-aura-p-card ' + rankClass[i] + '">'
+    const delay = (i * 100) + 'ms';
+    return '<div class="qz-aura-p-card ' + rankClass[i] + '" style="animation-delay:' + delay + '">'
       + '<div class="qz-aura-avatar">' + escHtml(_auraInitials(name)) + '</div>'
       + '<div class="qz-aura-name">' + escHtml(name) + (isMe ? ' (You)' : '') + '</div>'
       + '<div class="qz-aura-pts">' + row.score + ' AURA</div>'
@@ -10703,7 +10719,8 @@ function renderAuraLeaderboard(rows, myUserId) {
     const rank = i + 4;
     const name = row.user_name || 'Guest';
     const isMe = !!myUserId && row.user_id === myUserId;
-    return '<div class="qz-aura-row' + (isMe ? ' me' : '') + '">'
+    const delay = Math.min(300 + i * 55, 900) + 'ms';
+    return '<div class="qz-aura-row' + (isMe ? ' me' : '') + '" style="animation-delay:' + delay + '">'
       + '<div class="qz-aura-rank-num">#' + rank + '</div>'
       + '<div class="qz-aura-avatar">' + escHtml(_auraInitials(name)) + '</div>'
       + '<div class="qz-aura-row-name">' + escHtml(name) + (isMe ? '<span class="you-tag">You</span>' : '') + '</div>'

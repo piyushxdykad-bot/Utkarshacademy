@@ -642,6 +642,24 @@ async function loadSiteContent() {
 
   // Check confirmed-enrollment access now that course cards exist, so buttons are correct on first load
   if (typeof refreshStudyAccessAndCards === 'function') refreshStudyAccessAndCards();
+
+  // The sections just rendered above (videos, results, etc.) carry the
+  // "fade-up" animation class, which starts at opacity:0 until the
+  // IntersectionObserver set up by showPage() marks it .visible. That
+  // observer only scans the DOM once, at page-load time — before this
+  // async Supabase fetch had finished injecting these cards. Without a
+  // rescan here, freshly-added fade-up elements (e.g. the homepage video
+  // preview) stay invisible until the user clicks something else that
+  // happens to call showPage() again. Re-run it now so they show up
+  // immediately once the real content is in the DOM.
+  if (typeof resetAndObserveAnimations === 'function') {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        resetAndObserveAnimations();
+        if (typeof resetAndObserveCounters === 'function') resetAndObserveCounters();
+      });
+    });
+  }
 }
 
 function setText(id, val) {
@@ -9984,6 +10002,17 @@ updateAuthUI = function() {
   }
   .qz-overlay.open { display: flex; }
   .qz-overlay * { box-sizing: border-box; }
+  /* Fix: long/unbroken text (formulas, numbers, PDF-pasted strings with no
+     spaces) was overflowing sideways and getting clipped by body's
+     overflow-x:clip, making long questions look cut off. Force wrapping. */
+  .qz-qtext, .qz-option, .qz-review-qtext, .qz-instr-rules, .qz-instr-sub,
+  .qz-topbar-title, .qz-topbar-sub {
+    overflow-wrap: break-word; word-break: break-word; max-width: 100%;
+  }
+  /* The option-text div sits in a flex row next to the letter bubble but
+     had no flex-basis/min-width, so it could refuse to wrap and overflow
+     off-screen instead. Let it take the remaining space and wrap. */
+  .qz-option > div:last-child { flex: 1; min-width: 0; }
 
   /* ---------- Instructions screen ---------- */
   .qz-instr-wrap { max-width: 640px; margin: 0 auto; padding: 32px 20px 60px; width: 100%; }

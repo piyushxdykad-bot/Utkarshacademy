@@ -245,6 +245,41 @@ async function supaFetchMockLeaderboard(testName, limit) {
   } catch (e) { console.error('AURA leaderboard fetch exception:', e); return { rows: [], error: true }; }
 }
 
+// A user's profile photo lives on their account, not on any one quiz
+// attempt — so showing photos on a leaderboard (which mixes rows from many
+// different users) needs a small shared "profiles" table, publicly
+// readable, that maps user_id -> avatar_url. Kept in sync whenever someone
+// sets/removes their profile photo (see handleProfilePhotoSelected /
+// removeProfilePhoto).
+async function supaUpsertProfile(avatarUrl) {
+  try {
+    const user = await supaGetUser();
+    if (!user) return false;
+    const { error } = await _supa.from('profiles').upsert({
+      id: user.id,
+      name: localStorage.getItem('ua_user_name') || null,
+      avatar_url: avatarUrl,
+      updated_at: new Date().toISOString()
+    });
+    if (error) { console.warn('supaUpsertProfile failed (profiles table may not exist yet):', error); return false; }
+    return true;
+  } catch (e) { console.warn('supaUpsertProfile exception:', e); return false; }
+}
+
+// Batch-fetch avatar_url for a set of user_ids (e.g. everyone on one
+// leaderboard screen) in a single request rather than one per row.
+async function supaFetchProfileAvatars(userIds) {
+  try {
+    const ids = Array.from(new Set((userIds || []).filter(Boolean)));
+    if (!ids.length) return {};
+    const { data, error } = await _supa.from('profiles').select('id,avatar_url').in('id', ids);
+    if (error || !data) return {};
+    const map = {};
+    data.forEach(function (row) { if (row.avatar_url) map[row.id] = row.avatar_url; });
+    return map;
+  } catch (e) { return {}; }
+}
+
 // ============================================================
 //  CLASS LABELS — shared between the main site and the admin panel
 // ============================================================
@@ -9120,16 +9155,33 @@ function updateAuthUI() {
   const navCta = document.getElementById('nav-login');
   if (navCta) navCta.classList.toggle('logged-in-avatar', loggedIn);
 
-  // Nav avatar — swap the sign-in icon for the user's avatar picture once logged in
+  // Nav avatar — swap the sign-in icon for the user's avatar picture once logged in.
+  // Prefer whatever photo they've actually set (cached locally, or synced
+  // from another device) over the generic placeholder illustration.
   const navIcon = document.getElementById('nav-login-icon');
   const navAvatar = document.getElementById('nav-login-avatar');
   const mobIcon = document.getElementById('mob-login-icon');
   const mobAvatar = document.getElementById('mob-login-avatar');
-  const avatarSrc = loggedIn ? ('https://api.dicebear.com/9.x/notionists/svg?seed=' + encodeURIComponent(name) + '&backgroundColor=e8f3ff') : '';
+  const cachedPhoto = localStorage.getItem('ua_user_photo') || localStorage.getItem('ua_user_photo_url');
+  const fallbackAvatarSrc = 'https://api.dicebear.com/9.x/notionists/svg?seed=' + encodeURIComponent(name) + '&backgroundColor=e8f3ff';
+  const avatarSrc = loggedIn ? (cachedPhoto || fallbackAvatarSrc) : '';
   if (navIcon) navIcon.style.display = loggedIn ? 'none' : '';
   if (navAvatar) { navAvatar.style.display = loggedIn ? 'inline-block' : 'none'; if (loggedIn) navAvatar.src = avatarSrc; }
   if (mobIcon) mobIcon.style.display = loggedIn ? 'none' : '';
   if (mobAvatar) { mobAvatar.style.display = loggedIn ? 'inline-block' : 'none'; if (loggedIn) mobAvatar.src = avatarSrc; }
+
+  // This device doesn't have a cached photo yet — check whether the account
+  // has one synced from another device, and adopt it if so, without
+  // blocking the fast synchronous render above.
+  if (loggedIn && !cachedPhoto && typeof supaGetUser === 'function') {
+    supaGetUser().then(function (user) {
+      const remoteUrl = user && user.user_metadata && user.user_metadata.avatar_url;
+      if (!remoteUrl) return;
+      localStorage.setItem('ua_user_photo_url', remoteUrl);
+      if (navAvatar) navAvatar.src = remoteUrl;
+      if (mobAvatar) mobAvatar.src = remoteUrl;
+    }).catch(function () {});
+  }
 }
 
 // Run on every page show
@@ -10084,6 +10136,7 @@ async function handleProfilePhotoSelected(evt) {
     localStorage.setItem('ua_user_photo', dataUrl);
     const removePhotoBtn = document.getElementById('prof-remove-photo-btn');
     if (removePhotoBtn) removePhotoBtn.style.display = '';
+    if (typeof updateAuthUI === 'function') updateAuthUI(); // reflect it in the nav bar avatar too
 
     // Best-effort sync to Supabase Storage so the photo also follows the
     // account to other devices/browsers. If the "avatars" bucket hasn't
@@ -10102,6 +10155,7 @@ async function handleProfilePhotoSelected(evt) {
           if (publicUrl) {
             await _supa.auth.updateUser({ data: { avatar_url: publicUrl } });
             localStorage.setItem('ua_user_photo_url', publicUrl);
+            try { await supaUpsertProfile(publicUrl); } catch (e) { /* leaderboard photo sync is best-effort */ }
             synced = true;
           }
         } else {
@@ -10123,8 +10177,10 @@ async function removeProfilePhoto() {
   localStorage.removeItem('ua_user_photo');
   localStorage.removeItem('ua_user_photo_url');
   try { await _supa.auth.updateUser({ data: { avatar_url: null } }); } catch (e) {}
+  try { await supaUpsertProfile(null); } catch (e) { /* leaderboard photo sync is best-effort */ }
   showToast('Profile photo removed.');
   renderProfilePage();
+  if (typeof updateAuthUI === 'function') updateAuthUI();
 }
 
 </script>
@@ -10312,7 +10368,8 @@ async function removeProfilePhoto() {
   .qz-aura-p-card { flex: 1; max-width: 170px; border-radius: 16px; padding: 16px 10px 14px; text-align: center; position: relative; background: var(--light-blue); opacity: 0; animation: auraPopIn .55s cubic-bezier(.34,1.56,.64,1) forwards; transition: transform .25s ease, box-shadow .25s ease; }
   .qz-aura-p-card:hover { transform: translateY(-6px); box-shadow: 0 10px 24px var(--shadow-blue); }
   .qz-aura-avatar-wrap { position: relative; display: inline-block; margin-bottom: 10px; }
-  .qz-aura-p-card .qz-aura-avatar { width: 52px; height: 52px; border-radius: 50%; margin: 0; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 15px; color: white; background: linear-gradient(135deg, var(--navy), var(--royal)); border: 3px solid white; box-shadow: 0 4px 12px rgba(13,43,107,0.25); }
+  .qz-aura-p-card .qz-aura-avatar { width: 52px; height: 52px; border-radius: 50%; margin: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; font-weight: 800; font-size: 15px; color: white; background: linear-gradient(135deg, var(--navy), var(--royal)); border: 3px solid white; box-shadow: 0 4px 12px rgba(13,43,107,0.25); }
+  .qz-aura-p-card .qz-aura-avatar img { width: 100%; height: 100%; object-fit: cover; }
   /* King's crown, floats above the #1 spot */
   .qz-aura-crown { position: absolute; top: -28px; left: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; transform: translateX(-50%) rotate(-8deg); font-size: 24px; color: var(--gold); text-shadow: 0 1px 0 #b8860b, 0 4px 8px rgba(0,0,0,0.3); animation: auraCrownFloat 2.4s ease-in-out infinite; z-index: 2; }
   /* Silver / bronze medal badges for #2 and #3, pinned to the avatar */
@@ -10333,7 +10390,8 @@ async function removeProfilePhoto() {
   .qz-aura-row:hover { transform: translateX(4px); box-shadow: 0 4px 14px var(--shadow-blue); }
   .qz-aura-row.me { border: 1.5px solid var(--royal); background: var(--light-blue); }
   .qz-aura-row .qz-aura-rank-num { font-size: 12.5px; font-weight: 800; color: var(--royal); width: 28px; flex-shrink: 0; }
-  .qz-aura-row .qz-aura-avatar { width: 34px; height: 34px; border-radius: 50%; background: linear-gradient(135deg, var(--navy), var(--royal)); color: white; display: flex; align-items: center; justify-content: center; font-size: 11.5px; font-weight: 800; flex-shrink: 0; }
+  .qz-aura-row .qz-aura-avatar { width: 34px; height: 34px; border-radius: 50%; background: linear-gradient(135deg, var(--navy), var(--royal)); color: white; display: flex; align-items: center; justify-content: center; overflow: hidden; font-size: 11.5px; font-weight: 800; flex-shrink: 0; }
+  .qz-aura-row .qz-aura-avatar img { width: 100%; height: 100%; object-fit: cover; }
   .qz-aura-row .qz-aura-row-name { flex: 1; font-size: 13.5px; font-weight: 700; color: var(--text); word-break: break-word; }
   .qz-aura-row .qz-aura-row-name .you-tag { font-size: 10px; font-weight: 800; color: var(--royal); background: rgba(26,75,189,0.12); padding: 2px 7px; border-radius: 10px; margin-left: 6px; text-transform: uppercase; letter-spacing: .3px; }
   .qz-aura-row .qz-aura-row-pts { text-align: right; flex-shrink: 0; }
@@ -10875,7 +10933,10 @@ async function openAuraLeaderboard() {
   let myUserId = null;
   try { const u = await supaGetUser(); myUserId = u ? u.id : null; } catch (e) {}
 
-  renderAuraLeaderboard(rows, myUserId);
+  let avatarMap = {};
+  try { avatarMap = await supaFetchProfileAvatars(rows.map(function (r) { return r.user_id; })); } catch (e) { avatarMap = {}; }
+
+  renderAuraLeaderboard(rows, myUserId, avatarMap);
 }
 
 function closeAuraLeaderboard() {
@@ -10883,13 +10944,22 @@ function closeAuraLeaderboard() {
   document.body.style.overflow = '';
 }
 
-function renderAuraLeaderboard(rows, myUserId) {
+function renderAuraLeaderboard(rows, myUserId, avatarMap) {
+  avatarMap = avatarMap || {};
   const podiumEl = document.getElementById('qz-aura-podium');
   const listEl = document.getElementById('qz-aura-list');
 
   const top3 = rows.slice(0, 3);
   const rest = rows.slice(3);
   const rankClass = ['first', 'second', 'third'];
+
+  // Real photo when the account has one synced (via the "profiles" table);
+  // otherwise fall back to the initials circle, same as before.
+  function avatarInnerHtml(userId, name) {
+    const url = avatarMap[userId];
+    if (url) return '<img src="' + escAttrPublic(url) + '" alt="" loading="lazy">';
+    return escHtml(_auraInitials(name));
+  }
 
   // 1st place gets a floating crown; 2nd and 3rd get a silver / bronze medal
   // badge pinned to the bottom-right of their avatar.
@@ -10904,7 +10974,7 @@ function renderAuraLeaderboard(rows, myUserId) {
     const isMe = !!myUserId && row.user_id === myUserId;
     const delay = (i * 100) + 'ms';
     return '<div class="qz-aura-p-card ' + rankClass[i] + '" style="animation-delay:' + delay + '">'
-      + '<div class="qz-aura-avatar-wrap">' + podiumBadges[i] + '<div class="qz-aura-avatar">' + escHtml(_auraInitials(name)) + '</div></div>'
+      + '<div class="qz-aura-avatar-wrap">' + podiumBadges[i] + '<div class="qz-aura-avatar">' + avatarInnerHtml(row.user_id, name) + '</div></div>'
       + '<div class="qz-aura-name">' + escHtml(name) + (isMe ? ' (You)' : '') + '</div>'
       + '<div class="qz-aura-pts">' + row.score + ' AURA</div>'
       + '<div class="qz-aura-rank">' + (i + 1) + '</div>'
@@ -10918,7 +10988,7 @@ function renderAuraLeaderboard(rows, myUserId) {
     const delay = Math.min(300 + i * 55, 900) + 'ms';
     return '<div class="qz-aura-row' + (isMe ? ' me' : '') + '" style="animation-delay:' + delay + '">'
       + '<div class="qz-aura-rank-num">#' + rank + '</div>'
-      + '<div class="qz-aura-avatar">' + escHtml(_auraInitials(name)) + '</div>'
+      + '<div class="qz-aura-avatar">' + avatarInnerHtml(row.user_id, name) + '</div>'
       + '<div class="qz-aura-row-name">' + escHtml(name) + (isMe ? '<span class="you-tag">You</span>' : '') + '</div>'
       + '<div class="qz-aura-row-pts"><div class="n">' + row.score + '</div><div class="l">Aura</div></div>'
       + '</div>';

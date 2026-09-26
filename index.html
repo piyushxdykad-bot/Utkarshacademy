@@ -3861,6 +3861,10 @@ document.addEventListener('DOMContentLoaded', function() {
   .prof-user-pill { display:inline-flex; align-items:center; gap:12px; margin:0 auto 20px; background:linear-gradient(135deg, var(--navy), var(--royal), var(--sky)); border-radius:999px; padding:6px 26px 6px 6px; box-shadow:0 14px 30px var(--shadow-blue); max-width:100%; }
   .prof-avatar-wrap { flex-shrink:0; width:44px; height:44px; border-radius:50%; background:var(--light-blue); border:2px solid rgba(255,255,255,0.85); display:flex; align-items:center; justify-content:center; overflow:hidden; }
   .prof-avatar-wrap img { width:100%; height:100%; object-fit:cover; }
+  .prof-avatar-outer { position:relative; flex-shrink:0; display:inline-flex; }
+  .prof-avatar-edit-btn { position:absolute; bottom:-2px; right:-2px; width:18px; height:18px; border-radius:50%; background:var(--navy); color:#fff; border:2px solid #fff; display:flex; align-items:center; justify-content:center; font-size:8.5px; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,0.35); padding:0; transition:background .15s, transform .15s; }
+  .prof-avatar-edit-btn:hover { background:var(--royal); transform:scale(1.08); }
+  .prof-avatar-edit-btn:disabled { opacity:.6; cursor:wait; }
   .prof-name { font-family:'DM Sans',sans-serif; font-weight:800; font-size:18px; letter-spacing:0.2px; color:#fff; margin:0; word-break:break-word; }
   .prof-email { font-family:'DM Sans',sans-serif; font-weight:600; font-size:14.5px; color:var(--muted); margin:0 0 20px; }
   .prof-pill-outline { display:inline-flex; align-items:center; gap:8px; background:var(--light-blue); border:1.5px solid var(--mid-blue); border-radius:14px; padding:11px 20px; font-family:'DM Sans',sans-serif; font-weight:700; font-size:13px; letter-spacing:0.4px; color:var(--royal); text-transform:uppercase; cursor:pointer; margin-bottom:18px; transition:all .15s; }
@@ -3892,17 +3896,26 @@ document.addEventListener('DOMContentLoaded', function() {
 
       <div class="prof-card">
         <div class="prof-user-pill">
-          <span class="prof-avatar-wrap">
-            <img id="prof-avatar-img" src="" alt="Profile avatar">
+          <span class="prof-avatar-outer">
+            <span class="prof-avatar-wrap">
+              <img id="prof-avatar-img" src="" alt="Profile avatar">
+            </span>
+            <button type="button" class="prof-avatar-edit-btn" id="prof-avatar-edit-btn" onclick="triggerProfilePhotoPicker()" title="Change photo" aria-label="Change profile photo">
+              <i class="fas fa-camera"></i>
+            </button>
+            <input type="file" id="prof-avatar-file" accept="image/*" style="display:none;" onchange="handleProfilePhotoSelected(event)">
           </span>
           <h1 id="prof-name" class="prof-name">Student</h1>
         </div>
 
         <p id="prof-email" class="prof-email">—</p>
 
-        <div>
-          <button id="prof-edit-name-btn" class="prof-pill-outline" onclick="editProfileName()">
+        <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-bottom:18px;">
+          <button id="prof-edit-name-btn" class="prof-pill-outline" style="margin-bottom:0;" onclick="editProfileName()">
             <i class="fas fa-pencil"></i> <span id="prof-edit-name-label">Edit Name (1-time)</span>
+          </button>
+          <button id="prof-remove-photo-btn" class="prof-pill-outline" style="margin-bottom:0;display:none;" onclick="removeProfilePhoto()">
+            <i class="fas fa-trash"></i> Remove Photo
           </button>
         </div>
 
@@ -9907,10 +9920,24 @@ async function renderProfilePage() {
   if (emailEl) emailEl.textContent = email;
 
   const avatarImg = document.getElementById('prof-avatar-img');
+  const removePhotoBtn = document.getElementById('prof-remove-photo-btn');
+  // Prefer: (1) locally-cached photo, instant on this device, (2) the URL
+  // synced to the account (works across devices once Storage is set up),
+  // (3) fall back to the generated placeholder avatar.
+  const localPhoto = localStorage.getItem('ua_user_photo');
+  const remotePhotoUrl = (user && user.user_metadata && user.user_metadata.avatar_url) || localStorage.getItem('ua_user_photo_url');
+  const hasCustomPhoto = !!(localPhoto || remotePhotoUrl);
   if (avatarImg) {
-    const seed = encodeURIComponent(email !== '—' ? email : name);
-    avatarImg.src = 'https://api.dicebear.com/9.x/notionists/svg?seed=' + seed + '&backgroundColor=e8f3ff';
+    if (localPhoto) {
+      avatarImg.src = localPhoto;
+    } else if (remotePhotoUrl) {
+      avatarImg.src = remotePhotoUrl;
+    } else {
+      const seed = encodeURIComponent(email !== '—' ? email : name);
+      avatarImg.src = 'https://api.dicebear.com/9.x/notionists/svg?seed=' + seed + '&backgroundColor=e8f3ff';
+    }
   }
+  if (removePhotoBtn) removePhotoBtn.style.display = hasCustomPhoto ? '' : 'none';
 
   const memberSinceEl = document.getElementById('prof-member-since');
   if (memberSinceEl && user && user.created_at) {
@@ -9987,6 +10014,118 @@ updateAuthUI = function() {
   _origUpdateAuthUI();
   refreshStudyAccessAndCards();
 };
+
+/* ═══════════════════════════════════════════════════════════
+   PROFILE PHOTO — pick from gallery, resize client-side, then
+   sync to Supabase Storage (if set up) with a local-only fallback
+   so the feature works immediately even before that's configured.
+   ═══════════════════════════════════════════════════════════ */
+function triggerProfilePhotoPicker() {
+  const el = document.getElementById('prof-avatar-file');
+  if (el) el.click();
+}
+
+// Reads an image file, center-crops it to a square, and downsizes it so
+// what we store/upload stays small (a few dozen KB) regardless of the
+// original photo's resolution.
+function _resizeImageFileToSquareDataUrl(file, maxDim, quality) {
+  return new Promise(function (resolve, reject) {
+    const reader = new FileReader();
+    reader.onerror = function () { reject(new Error('Could not read that file.')); };
+    reader.onload = function () {
+      const img = new Image();
+      img.onerror = function () { reject(new Error('Could not decode that image.')); };
+      img.onload = function () {
+        const side = Math.min(img.width, img.height);
+        const sx = (img.width - side) / 2;
+        const sy = (img.height - side) / 2;
+        const outSize = Math.min(maxDim, side);
+        const canvas = document.createElement('canvas');
+        canvas.width = outSize;
+        canvas.height = outSize;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, outSize, outSize);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function _dataUrlToBlob(dataUrl) {
+  const parts = dataUrl.split(',');
+  const mimeMatch = parts[0].match(/:(.*?);/);
+  const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+  const bstr = atob(parts[1]);
+  let n = bstr.length;
+  const u8arr = new Uint8Array(n);
+  while (n--) { u8arr[n] = bstr.charCodeAt(n); }
+  return new Blob([u8arr], { type: mime });
+}
+
+async function handleProfilePhotoSelected(evt) {
+  const file = evt.target.files && evt.target.files[0];
+  evt.target.value = ''; // allow re-picking the same file later
+  if (!file) return;
+  if (!file.type || !file.type.startsWith('image/')) { showToast('Please choose an image file.'); return; }
+  if (file.size > 12 * 1024 * 1024) { showToast('That image is too large — please pick one under 12MB.'); return; }
+
+  const editBtn = document.getElementById('prof-avatar-edit-btn');
+  if (editBtn) { editBtn.disabled = true; editBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
+
+  try {
+    const dataUrl = await _resizeImageFileToSquareDataUrl(file, 480, 0.85);
+
+    // Show it and cache it locally immediately — don't make the user wait
+    // on a network round-trip to see their new photo.
+    const avatarImg = document.getElementById('prof-avatar-img');
+    if (avatarImg) avatarImg.src = dataUrl;
+    localStorage.setItem('ua_user_photo', dataUrl);
+    const removePhotoBtn = document.getElementById('prof-remove-photo-btn');
+    if (removePhotoBtn) removePhotoBtn.style.display = '';
+
+    // Best-effort sync to Supabase Storage so the photo also follows the
+    // account to other devices/browsers. If the "avatars" bucket hasn't
+    // been created yet (or the user is offline), this fails silently and
+    // the photo still works locally via the cache above.
+    let synced = false;
+    try {
+      const user = await supaGetUser();
+      if (user && _supa && _supa.storage) {
+        const blob = _dataUrlToBlob(dataUrl);
+        const path = user.id + '/avatar.jpg';
+        const { error: upErr } = await _supa.storage.from('avatars').upload(path, blob, { upsert: true, contentType: 'image/jpeg' });
+        if (!upErr) {
+          const { data: pub } = _supa.storage.from('avatars').getPublicUrl(path);
+          const publicUrl = pub && pub.publicUrl ? (pub.publicUrl + '?t=' + Date.now()) : null;
+          if (publicUrl) {
+            await _supa.auth.updateUser({ data: { avatar_url: publicUrl } });
+            localStorage.setItem('ua_user_photo_url', publicUrl);
+            synced = true;
+          }
+        } else {
+          console.warn('Avatar upload failed (falling back to local-only):', upErr);
+        }
+      }
+    } catch (e) { console.warn('Avatar sync exception (falling back to local-only):', e); }
+
+    showToast(synced ? 'Profile photo updated!' : 'Photo saved on this device.');
+  } catch (e) {
+    console.error('Profile photo error:', e);
+    showToast('Could not use that image. Please try another.');
+  } finally {
+    if (editBtn) { editBtn.disabled = false; editBtn.innerHTML = '<i class="fas fa-camera"></i>'; }
+  }
+}
+
+async function removeProfilePhoto() {
+  localStorage.removeItem('ua_user_photo');
+  localStorage.removeItem('ua_user_photo_url');
+  try { await _supa.auth.updateUser({ data: { avatar_url: null } }); } catch (e) {}
+  showToast('Profile photo removed.');
+  renderProfilePage();
+}
 
 </script>
 

@@ -237,9 +237,12 @@ async function supaFetchMockLeaderboard(testName, limit) {
       .order('score', { ascending: false })
       .order('created_at', { ascending: true })
       .limit(limit || 50);
-    if (error) return [];
-    return data || [];
-  } catch (e) { return []; }
+    // Distinguish "query blocked/failed" (e.g. RLS denies cross-user reads,
+    // or the request never reached Supabase) from "query worked, nobody has
+    // attempted this mock yet" — these need different messaging on screen.
+    if (error) { console.error('AURA leaderboard fetch error:', error); return { rows: [], error: true }; }
+    return { rows: data || [], error: false };
+  } catch (e) { console.error('AURA leaderboard fetch exception:', e); return { rows: [], error: true }; }
 }
 
 // ============================================================
@@ -10312,7 +10315,7 @@ updateAuthUI = function() {
     </div>
     <div class="qz-aura-empty" id="qz-aura-empty" style="display:none;">
       <i class="fas fa-trophy"></i>
-      <div>No one has scored on this mock yet.</div>
+      <div class="qz-aura-empty-title">No one has scored on this mock yet.</div>
       <div class="small">Be the first name on this leaderboard!</div>
     </div>
 
@@ -10703,13 +10706,23 @@ async function openAuraLeaderboard() {
   emptyEl.style.display = 'none';
   loadingEl.style.display = '';
 
-  let rows = [];
-  try { rows = await supaFetchMockLeaderboard(testName, 50); } catch (e) { rows = []; }
+  let result = { rows: [], error: false };
+  try { result = await supaFetchMockLeaderboard(testName, 50); } catch (e) { result = { rows: [], error: true }; }
 
   loadingEl.style.display = 'none';
 
+  if (result.error) {
+    emptyEl.style.display = '';
+    emptyEl.querySelector('.qz-aura-empty-title').textContent = "Couldn't load the leaderboard.";
+    emptyEl.querySelector('.small').textContent = 'Check your connection and try again in a moment.';
+    return;
+  }
+
+  const rows = result.rows;
   if (!rows.length) {
     emptyEl.style.display = '';
+    emptyEl.querySelector('.qz-aura-empty-title').textContent = 'No one has scored on this mock yet.';
+    emptyEl.querySelector('.small').textContent = 'Be the first name on this leaderboard!';
     return;
   }
 

@@ -10172,7 +10172,14 @@ updateAuthUI = function() {
   .qz-aura-podium { display: flex; align-items: flex-end; justify-content: center; gap: 12px; margin-bottom: 26px; }
   .qz-aura-p-card { flex: 1; max-width: 170px; border-radius: 16px; padding: 16px 10px 14px; text-align: center; position: relative; background: var(--light-blue); opacity: 0; animation: auraPopIn .55s cubic-bezier(.34,1.56,.64,1) forwards; transition: transform .25s ease, box-shadow .25s ease; }
   .qz-aura-p-card:hover { transform: translateY(-6px); box-shadow: 0 10px 24px var(--shadow-blue); }
-  .qz-aura-p-card .qz-aura-avatar { width: 52px; height: 52px; border-radius: 50%; margin: 0 auto 10px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 15px; color: white; background: linear-gradient(135deg, var(--navy), var(--royal)); border: 3px solid white; box-shadow: 0 4px 12px rgba(13,43,107,0.25); }
+  .qz-aura-avatar-wrap { position: relative; display: inline-block; margin-bottom: 10px; }
+  .qz-aura-p-card .qz-aura-avatar { width: 52px; height: 52px; border-radius: 50%; margin: 0; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 15px; color: white; background: linear-gradient(135deg, var(--navy), var(--royal)); border: 3px solid white; box-shadow: 0 4px 12px rgba(13,43,107,0.25); }
+  /* King's crown, floats above the #1 spot */
+  .qz-aura-crown { position: absolute; top: -28px; left: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; transform: translateX(-50%) rotate(-8deg); font-size: 24px; color: var(--gold); text-shadow: 0 1px 0 #b8860b, 0 4px 8px rgba(0,0,0,0.3); animation: auraCrownFloat 2.4s ease-in-out infinite; z-index: 2; }
+  /* Silver / bronze medal badges for #2 and #3, pinned to the avatar */
+  .qz-aura-medal { position: absolute; bottom: -2px; right: -4px; width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10.5px; color: white; border: 2px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.3); z-index: 2; }
+  .qz-aura-medal.silver { background: linear-gradient(135deg, #e2e8f0, #94a3b8); }
+  .qz-aura-medal.bronze { background: linear-gradient(135deg, #e0a978, #a5652f); }
   .qz-aura-p-card .qz-aura-name { font-size: 12px; font-weight: 800; color: var(--navy); margin-bottom: 8px; word-break: break-word; }
   .qz-aura-p-card .qz-aura-pts { display: inline-block; background: white; border-radius: 20px; padding: 5px 14px; font-size: 12.5px; font-weight: 800; color: var(--navy); }
   .qz-aura-p-card .qz-aura-rank { position: absolute; bottom: -10px; right: 10px; font-size: 30px; font-weight: 900; color: rgba(13,43,107,0.12); font-family: 'Playfair Display', serif; }
@@ -10745,12 +10752,20 @@ function renderAuraLeaderboard(rows, myUserId) {
   const rest = rows.slice(3);
   const rankClass = ['first', 'second', 'third'];
 
+  // 1st place gets a floating crown; 2nd and 3rd get a silver / bronze medal
+  // badge pinned to the bottom-right of their avatar.
+  const podiumBadges = [
+    '<div class="qz-aura-crown"><i class="fas fa-crown"></i></div>',
+    '<div class="qz-aura-medal silver"><i class="fas fa-medal"></i></div>',
+    '<div class="qz-aura-medal bronze"><i class="fas fa-medal"></i></div>'
+  ];
+
   podiumEl.innerHTML = top3.map(function (row, i) {
     const name = row.user_name || 'Guest';
     const isMe = !!myUserId && row.user_id === myUserId;
     const delay = (i * 100) + 'ms';
     return '<div class="qz-aura-p-card ' + rankClass[i] + '" style="animation-delay:' + delay + '">'
-      + '<div class="qz-aura-avatar">' + escHtml(_auraInitials(name)) + '</div>'
+      + '<div class="qz-aura-avatar-wrap">' + podiumBadges[i] + '<div class="qz-aura-avatar">' + escHtml(_auraInitials(name)) + '</div></div>'
       + '<div class="qz-aura-name">' + escHtml(name) + (isMe ? ' (You)' : '') + '</div>'
       + '<div class="qz-aura-pts">' + row.score + ' AURA</div>'
       + '<div class="qz-aura-rank">' + (i + 1) + '</div>'

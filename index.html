@@ -321,7 +321,7 @@ async function setContent(key, value) {
 //  account on a different device brings all of it along.
 //
 //  Same key/value shape as site_content above, but scoped per-user in
-//  "user_sync_data" (user_id, data_key, data_value, updated_at) with
+//  "ua_student_state" (user_id, data_key, data_value, updated_at) with
 //  row-level security so a student can only ever read/write their own
 //  rows. Every existing localStorage getter/setter for the data listed
 //  above still works exactly as before (this is additive) — writes now
@@ -350,7 +350,7 @@ async function syncSaveState(dataKey, value) {
   try {
     const user = await supaGetUser();
     if (!user) return;
-    await _supa.from('user_sync_data').upsert({
+    await _supa.from('ua_student_state').upsert({
       user_id: user.id,
       data_key: dataKey,
       data_value: value,
@@ -382,7 +382,7 @@ async function hydrateFromCloud() {
   try {
     const user = await supaGetUser();
     if (!user) return;
-    const { data, error } = await _supa.from('user_sync_data').select('data_key,data_value').eq('user_id', user.id);
+    const { data, error } = await _supa.from('ua_student_state').select('data_key,data_value').eq('user_id', user.id);
     if (error || !data) return;
     data.forEach(function (row) {
       try { localStorage.setItem(row.data_key, JSON.stringify(row.data_value)); } catch (e) {}

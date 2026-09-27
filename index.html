@@ -1795,6 +1795,7 @@ document.addEventListener('DOMContentLoaded', function() {
   .hlm-tag-time { background: #f1f5f9; color: #475569; }
   .hlm-btn { margin-top: 2px; align-self: flex-start; background: linear-gradient(135deg,#22c55e,#16a34a); color: white; border: none; padding: 7px 14px; border-radius: 8px; font-size: 10.5px; font-weight: 800; letter-spacing: 0.3px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; text-decoration: none; }
   .hlm-btn.hlm-view-btn { background: linear-gradient(135deg, var(--mid-blue), var(--royal)); }
+  .hlm-btn.hlm-locked-btn { background: rgba(255,255,255,0.14); color: rgba(255,255,255,0.85); }
   .hlm-empty { color: rgba(255,255,255,0.75); font-size: 13px; text-align: center; padding: 40px 10px; }
   .hlm-empty i { font-size: 30px; display: block; margin-bottom: 12px; color: var(--sky); }
   .hlm-footer-link { text-align: center; margin-top: 12px; }
@@ -7252,13 +7253,30 @@ function toggleHomeHeroOrDashboard(hasCourse) {
   if (heroBtns) heroBtns.style.display = hasCourse ? 'none' : '';
   if (hero) hero.classList.toggle('hero-compact', hasCourse);
 
-  // Once enrolled, the hero logo/floating-card visual is swapped for the
-  // Live Mocks widget (see renderHeroLiveMocks below).
+  // The hero logo/floating-card visual is swapped for the Live Mocks widget
+  // whenever at least one Day-D mock is currently live — for EVERY visitor,
+  // enrolled or not, logged in or not. If nothing is live, the logo and
+  // floating cards always show instead (see renderHeroLiveMocks below).
+  refreshHeroVisual();
+}
+
+// Checks DAYD_MOCKS_DATA across every class (not just the current student's
+// enrolled ones) for at least one currently-live Day-D mock.
+function anyLiveMockExists() {
+  return Object.keys(DAYD_MOCKS_DATA || {}).some(function (ck) {
+    return (DAYD_MOCKS_DATA[ck] || []).some(function (raw) { return daydIsLive(raw); });
+  });
+}
+
+// Decides which hero visual to show: the Live Mocks widget (any mock live,
+// any visitor) or the default logo/floating cards (nothing live).
+function refreshHeroVisual() {
   const defaultVisual = document.getElementById('hero-default-visual');
   const liveMocksWrap = document.getElementById('hero-live-mocks-wrap');
-  if (defaultVisual) defaultVisual.style.display = hasCourse ? 'none' : '';
-  if (liveMocksWrap) liveMocksWrap.style.display = hasCourse ? 'flex' : 'none';
-  if (hasCourse) renderHeroLiveMocks();
+  const isLive = anyLiveMockExists();
+  if (defaultVisual) defaultVisual.style.display = isLive ? 'none' : '';
+  if (liveMocksWrap) liveMocksWrap.style.display = isLive ? 'flex' : 'none';
+  if (isLive) renderHeroLiveMocks();
 }
 
 // ===== HERO LIVE MOCKS WIDGET =====
@@ -7270,19 +7288,38 @@ function toggleHomeHeroOrDashboard(hasCourse) {
 function heroLiveMocksMonthShort(dateObj) {
   return dateObj.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
 }
-function getHeroLiveMocksItems() {
+// Which classKeys the current student is actually enrolled in (empty for a
+// guest, or a logged-in student with no course yet).
+function heroEnrolledClassKeys() {
   const confirmed = (window._UA_MY_CONFIRMED || []).filter(function (s) { return !/mocks$|notes$/.test(s); });
   const courses = confirmed.filter(function (s) { return CLASS_LABELS.hasOwnProperty(s); });
   const seenKeys = {};
-  const items = [];
+  const keys = [];
   courses.forEach(function (slug) {
     courseComponentKeys(slug).forEach(function (ck) {
-      if (seenKeys[ck]) return; // avoid duplicate classKey across two enrolled slugs
+      if (seenKeys[ck]) return;
       seenKeys[ck] = true;
-      (DAYD_MOCKS_DATA[ck] || []).forEach(function (raw, idx) {
-        if (!daydIsLive(raw)) return;
-        items.push({ raw: raw, idx: idx, classKey: ck });
-      });
+      keys.push(ck);
+    });
+  });
+  return keys;
+}
+// True once the student is confirmed/enrolled for the given classKey's
+// course — used to gate whether they can actually attempt a live mock.
+function heroClassKeyEnrolled(classKey) {
+  return heroEnrolledClassKeys().indexOf(classKey) > -1;
+}
+function getHeroLiveMocksItems() {
+  const enrolledKeys = heroEnrolledClassKeys();
+  // Enrolled students see live mocks for their own course(s); a guest or a
+  // student with no course yet sees every live mock across every class, so
+  // the widget still shows in the hero for them — they just can't attempt.
+  const classKeys = enrolledKeys.length ? enrolledKeys : Object.keys(DAYD_MOCKS_DATA || {});
+  const items = [];
+  classKeys.forEach(function (ck) {
+    (DAYD_MOCKS_DATA[ck] || []).forEach(function (raw, idx) {
+      if (!daydIsLive(raw)) return;
+      items.push({ raw: raw, idx: idx, classKey: ck });
     });
   });
   // Most recently published first; undated items (always-live) sort last.
@@ -7293,6 +7330,18 @@ function getHeroLiveMocksItems() {
   });
   return items;
 }
+// Called when a visitor without access to a class's live mock taps the
+// hero's attempt button — sends them to log in, or to enroll if they're
+// already logged in but just haven't joined that course yet.
+function heroLockedMockClick(classKey) {
+  if (!isLoggedIn()) {
+    showPage('login');
+    showLoginPrompt('Log in to attend this live mock.');
+  } else {
+    showToast('Enroll in ' + (CLASS_LABELS[classKey] || 'this course') + ' to attend this live mock.');
+    heroExploreCourses();
+  }
+}
 function renderHeroLiveMocks() {
   const scrollEl = document.getElementById('hlm-scroll-body');
   const subLineEl = document.getElementById('hlm-sub-line');
@@ -7301,7 +7350,7 @@ function renderHeroLiveMocks() {
 
   const confirmed = (window._UA_MY_CONFIRMED || []).filter(function (s) { return !/mocks$|notes$/.test(s); });
   const courses = confirmed.filter(function (s) { return CLASS_LABELS.hasOwnProperty(s); });
-  if (subLineEl) subLineEl.textContent = courses.length ? 'For ' + courses.map(function (s) { return CLASS_LABELS[s]; }).join(' & ') : 'For your enrolled course';
+  if (subLineEl) subLineEl.textContent = courses.length ? 'For ' + courses.map(function (s) { return CLASS_LABELS[s]; }).join(' & ') : 'Log in & enroll to attend';
 
   const items = getHeroLiveMocksItems();
   if (!items.length) {
@@ -7326,8 +7375,13 @@ function renderHeroLiveMocks() {
 
     const hasQuestions = isObj && qCount > 0;
     const attempted = hasQuestions && hasAttemptedQuiz('dayd', classKey, test);
+    const hasAccess = heroClassKeyEnrolled(classKey);
     let actionHtml;
-    if (attempted) {
+    if (!hasAccess) {
+      // Visible to everyone, but a student without this course can't
+      // actually attempt it — tapping sends them to log in / enroll instead.
+      actionHtml = '<button type="button" class="hlm-btn hlm-locked-btn" onclick="heroLockedMockClick(\'' + classKey + '\')"><i class="fas fa-lock"></i> Log In to Attend</button>';
+    } else if (attempted) {
       actionHtml = '<button type="button" class="hlm-btn hlm-view-btn" onclick="viewQuizResult(\'dayd\', \'' + classKey + '\', \'' + _mchpEsc(test) + '\')"><i class="fas fa-chart-simple"></i> View Result</button>';
     } else {
       actionHtml = '<button type="button" class="hlm-btn" onclick="startDaydMock(\'' + classKey + '\', ' + idx + ')"><i class="fas fa-arrow-right"></i> Attempt Now</button>';

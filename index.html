@@ -150,6 +150,7 @@ async function supaSignOut() {
   await _supa.auth.signOut();
   localStorage.removeItem('ua_logged_in');
   localStorage.removeItem('ua_user_name');
+  if (typeof clearSyncedLocalData === 'function') clearSyncedLocalData();
 }
 
 // Get current logged-in user
@@ -311,6 +312,82 @@ async function setContent(key, value) {
   const { error } = await _supa.from('site_content').upsert({ key: key, value: JSON.stringify(value), updated_at: new Date().toISOString() });
   if (error) { showToast('Save failed: ' + error.message); return false; }
   return true;
+}
+
+// ============================================================
+//  CROSS-DEVICE SYNC — mirrors a student's on-device data (progress,
+//  mock/Day-D results + reviews, paid mock/notes unlocks, "My Notes",
+//  one-time name-edit flag) to Supabase, so logging in with the same
+//  account on a different device brings all of it along.
+//
+//  Same key/value shape as site_content above, but scoped per-user in
+//  "user_sync_data" (user_id, data_key, data_value, updated_at) with
+//  row-level security so a student can only ever read/write their own
+//  rows. Every existing localStorage getter/setter for the data listed
+//  above still works exactly as before (this is additive) — writes now
+//  also go to the cloud, and a fresh login pulls the cloud copy down
+//  into localStorage before the student reaches any page that reads it.
+// ============================================================
+
+// Every localStorage key PREFIX that is safe to sync/clear this way.
+// (Login-state itself — ua_logged_in/ua_user_name/email — and the
+// already-cloud-synced photo/profile fields are deliberately NOT here.)
+const UA_SYNCED_KEY_PREFIXES = [
+  'ua_progress_',            // lectures/mocks/dayd "attempted" tracking
+  'ua_mock_results_',        // per-mock correct/wrong/time summaries
+  'ua_quiz_full_result_',    // full scored review of a completed test
+  'ua_mock_purchases_',      // individually-bought mocks (₹40 each)
+  'ua_note_purchases_',      // individually-bought notes chapters (₹60 each)
+  'ua_my_notes_',            // student's own "Create Your Notes" text
+  'ua_name_edit_used_'       // one-time profile-name-edit flag
+];
+
+// Fire-and-forget: mirrors one localStorage-style key/value to the
+// cloud for the current student. Never blocks or throws — if it's
+// offline or not logged in, the local copy (already saved by the
+// caller) is simply all that exists until the next successful sync.
+async function syncSaveState(dataKey, value) {
+  try {
+    const user = await supaGetUser();
+    if (!user) return;
+    await _supa.from('user_sync_data').upsert({
+      user_id: user.id,
+      data_key: dataKey,
+      data_value: value,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'user_id,data_key' });
+  } catch (e) { /* offline/unavailable — local copy still stands */ }
+}
+
+// Removes every locally-cached value in the synced categories above.
+// Run right before hydrating a freshly-logged-in account (so a leftover
+// value from whoever used this browser/device before can't bleed into
+// the next student's view even for a moment) and on sign-out.
+function clearSyncedLocalData() {
+  try {
+    Object.keys(localStorage).forEach(function (k) {
+      if (UA_SYNCED_KEY_PREFIXES.some(function (p) { return k.indexOf(p) === 0; })) {
+        localStorage.removeItem(k);
+      }
+    });
+  } catch (e) { /* storage unavailable */ }
+}
+
+// Pulls every synced row for the current student from the cloud and
+// writes it back into localStorage under its original key, so every
+// existing get*() function above (which all read straight from
+// localStorage) sees the synced data immediately with no other code
+// changes needed. Call right after a successful sign-in.
+async function hydrateFromCloud() {
+  try {
+    const user = await supaGetUser();
+    if (!user) return;
+    const { data, error } = await _supa.from('user_sync_data').select('data_key,data_value').eq('user_id', user.id);
+    if (error || !data) return;
+    data.forEach(function (row) {
+      try { localStorage.setItem(row.data_key, JSON.stringify(row.data_value)); } catch (e) {}
+    });
+  } catch (e) { /* offline — device just falls back to whatever it had locally */ }
 }
 
 // Escape a value for safe use inside an HTML attribute/text position.
@@ -4393,14 +4470,23 @@ _supa.auth.onAuthStateChange(async (event, session) => {
     const name = session.user.user_metadata?.full_name
       || session.user.user_metadata?.name
       || (session.user.email ? session.user.email.split('@')[0] : 'Student');
+    // Wipe any leftover synced data this browser/device might still be
+    // holding (e.g. a previous student's session on a shared device),
+    // then pull this account's real progress/results/purchases/notes
+    // down from the cloud BEFORE marking the site as logged in — so the
+    // very first render after login already shows the synced data.
+    clearSyncedLocalData();
+    await hydrateFromCloud();
     localStorage.setItem('ua_logged_in', 'true');
     localStorage.setItem('ua_user_name', name);
     if (session.user.email) localStorage.setItem('ua_user_email', session.user.email);
     if (typeof updateAuthUI === 'function') updateAuthUI();
+    if (typeof renderStudentDashboard === 'function') { try { renderStudentDashboard(); } catch (e) {} }
   }
   if (event === 'SIGNED_OUT') {
     localStorage.removeItem('ua_logged_in');
     localStorage.removeItem('ua_user_name');
+    clearSyncedLocalData();
     if (typeof updateAuthUI === 'function') updateAuthUI();
   }
 });
@@ -4866,6 +4952,7 @@ function _addProgressItem(kind, classKey, key) {
   if (arr.indexOf(key) === -1) {
     arr.push(key);
     try { localStorage.setItem(_progKey(kind, classKey), JSON.stringify(arr)); } catch (e) { /* storage full/unavailable */ }
+    syncSaveState(_progKey(kind, classKey), arr);
   }
 }
 function recordLectureWatch(classKey, subject, chapter) { _addProgressItem('lectures', classKey, subject + '::' + chapter); }
@@ -4898,6 +4985,7 @@ function _recordRealMockResult(kind, classKey, key, result) {
   const results = getMockResults(kind, classKey).filter(function(r) { return r.key !== key; });
   results.push({ key: key, total: result.total, correct: result.correct, wrong: result.wrong, timeMin: result.timeMin });
   try { localStorage.setItem(_mockResultsKey(kind, classKey), JSON.stringify(results)); } catch (e) { /* storage full/unavailable */ }
+  syncSaveState(_mockResultsKey(kind, classKey), results);
 }
 
 // ----- Attempt lock -----
@@ -4910,6 +4998,7 @@ function _recordRealMockResult(kind, classKey, key, result) {
 function _fullResultKey(kind, classKey, key) { return 'ua_quiz_full_result_' + kind + '_' + classKey + '_' + key; }
 function saveFullQuizResult(kind, classKey, key, data) {
   try { localStorage.setItem(_fullResultKey(kind, classKey, key), JSON.stringify(data)); } catch (e) { /* storage full/unavailable */ }
+  syncSaveState(_fullResultKey(kind, classKey, key), data);
 }
 function getFullQuizResult(kind, classKey, key) {
   try {
@@ -4996,6 +5085,7 @@ function getMockPurchases(classKey) {
 }
 function saveMockPurchases(classKey, arr) {
   try { localStorage.setItem(mockPurchaseKey(classKey), JSON.stringify(arr)); } catch (e) { /* storage full/unavailable */ }
+  syncSaveState(mockPurchaseKey(classKey), arr);
 }
 function isMockPurchased(classKey, subject, item) {
   return getMockPurchases(classKey).indexOf(subject + '::' + item) > -1;
@@ -5669,6 +5759,7 @@ function getNotePurchases(classKey) {
 }
 function saveNotePurchases(classKey, arr) {
   try { localStorage.setItem(notePurchaseKey(classKey), JSON.stringify(arr)); } catch (e) { /* storage full/unavailable */ }
+  syncSaveState(notePurchaseKey(classKey), arr);
 }
 function isNotePurchased(classKey, subject, chapter) {
   return getNotePurchases(classKey).indexOf(subject + '::' + chapter) > -1;
@@ -6015,6 +6106,7 @@ function getMyNotes(classKey) {
 }
 function saveMyNotesToStorage(classKey, notes) {
   try { localStorage.setItem(notesStorageKey(classKey), JSON.stringify(notes)); } catch (e) { /* storage full/unavailable */ }
+  syncSaveState(notesStorageKey(classKey), notes);
 }
 function _uanEscText(str) {
   const d = document.createElement('div');
@@ -10056,6 +10148,7 @@ async function editProfileName() {
   if (error) { showToast('Could not update name: ' + error.message); return; }
   localStorage.setItem('ua_user_name', trimmed);
   localStorage.setItem(usedKey, 'true');
+  syncSaveState(usedKey, true);
   showToast('Name updated successfully!');
   renderProfilePage();
   updateAuthUI();

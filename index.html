@@ -10464,7 +10464,7 @@ async function removeProfilePhoto() {
   .qz-option > div:last-child { flex: 1; min-width: 0; }
 
   /* ---------- Instructions screen ---------- */
-  .qz-instr-wrap { max-width: 640px; margin: 0 auto; padding: 32px 20px 60px; width: 100%; }
+  .qz-instr-wrap { max-width: 640px; margin: 0 auto; padding: 32px 20px 60px; width: 100%; flex-shrink: 0; }
   .qz-instr-title { font-family:'Playfair Display',serif; font-size: 26px; font-weight: 700; color: var(--navy); margin-bottom: 6px; }
   .qz-instr-sub { font-size: 13.5px; color: var(--muted); margin-bottom: 24px; }
   .qz-instr-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; border: 1.5px solid var(--mid-blue); border-radius: 12px; overflow: hidden; }
@@ -10485,16 +10485,15 @@ async function removeProfilePhoto() {
   .qz-btn-outline:hover { background: var(--light-blue); }
 
   /* ---------- Runner screen ---------- */
-  /* Was height:100% + min-height:100vh, which rigidly locked this column
-     to exactly one screen's height. Any question + its options taller
-     than that (long assertion-reason questions, 4+ line options, etc.)
-     then had nowhere to go — the extra content got clipped near the
-     bottom instead of properly extending the scrollable area, which is
-     why the last option/footer looked cut off with no way to scroll
-     further. min-height (not height) lets this box grow past one
-     screen when the content needs it, while still filling the full
-     screen when it doesn't. */
-  .qz-runner { display: none; flex-direction: column; min-height: 100%; position: relative; }
+  /* min-height alone (previous attempt) wasn't enough: .qz-runner is a
+     flex item inside .qz-overlay's column layout, and flex items are
+     allowed to SHRINK by default — the browser was squeezing it back
+     down to exactly one screen's height regardless, clipping anything
+     taller. flex-shrink:0 stops that squeeze entirely, so the box is
+     sized by its actual content (never less than one screen, thanks to
+     min-height, but free to grow taller when a question needs it) —
+     which is what actually lets .qz-overlay's scrolling reach it all. */
+  .qz-runner { display: none; flex-direction: column; min-height: 100%; flex-shrink: 0; position: relative; }
   .qz-runner.active { display: flex; }
   .qz-watermark {
     position: fixed; inset: 0; z-index: 90; pointer-events: none;

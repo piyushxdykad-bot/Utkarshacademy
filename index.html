@@ -10138,33 +10138,50 @@ async function handleProfilePhotoSelected(evt) {
     if (removePhotoBtn) removePhotoBtn.style.display = '';
     if (typeof updateAuthUI === 'function') updateAuthUI(); // reflect it in the nav bar avatar too
 
-    // Best-effort sync to Supabase Storage so the photo also follows the
-    // account to other devices/browsers. If the "avatars" bucket hasn't
-    // been created yet (or the user is offline), this fails silently and
-    // the photo still works locally via the cache above.
-    let synced = false;
+    // Sync to Supabase Storage + the shared "profiles" table so the photo
+    // also follows the account to other devices and shows up on the AURA
+    // leaderboard. Track exactly which step fails (if any) so we can tell
+    // the user precisely what to fix, instead of a generic message.
+    let syncStage = 'local'; // 'local' | 'uploaded_only' | 'full'
+    let syncDetail = '';
     try {
       const user = await supaGetUser();
-      if (user && _supa && _supa.storage) {
+      if (!user) {
+        syncDetail = 'not signed in';
+      } else if (!_supa || !_supa.storage) {
+        syncDetail = 'Storage client unavailable';
+      } else {
         const blob = _dataUrlToBlob(dataUrl);
         const path = user.id + '/avatar.jpg';
         const { error: upErr } = await _supa.storage.from('avatars').upload(path, blob, { upsert: true, contentType: 'image/jpeg' });
-        if (!upErr) {
+        if (upErr) {
+          syncDetail = 'Storage upload failed — ' + (upErr.message || 'is the "avatars" bucket created?');
+        } else {
           const { data: pub } = _supa.storage.from('avatars').getPublicUrl(path);
           const publicUrl = pub && pub.publicUrl ? (pub.publicUrl + '?t=' + Date.now()) : null;
-          if (publicUrl) {
+          if (!publicUrl) {
+            syncDetail = 'could not get a public URL for the uploaded photo';
+          } else {
             await _supa.auth.updateUser({ data: { avatar_url: publicUrl } });
             localStorage.setItem('ua_user_photo_url', publicUrl);
-            try { await supaUpsertProfile(publicUrl); } catch (e) { /* leaderboard photo sync is best-effort */ }
-            synced = true;
+            const profileOk = await supaUpsertProfile(publicUrl);
+            if (profileOk) {
+              syncStage = 'full';
+            } else {
+              syncStage = 'uploaded_only';
+              syncDetail = 'saved the photo, but couldn\'t add it to the leaderboard profile — check the "profiles" table exists with the right RLS policies';
+            }
           }
-        } else {
-          console.warn('Avatar upload failed (falling back to local-only):', upErr);
         }
       }
-    } catch (e) { console.warn('Avatar sync exception (falling back to local-only):', e); }
+    } catch (e) { syncDetail = (e && e.message) ? e.message : String(e); }
 
-    showToast(synced ? 'Profile photo updated!' : 'Photo saved on this device.');
+    if (syncStage === 'full') {
+      showToast('Profile photo updated!');
+    } else {
+      console.warn('Avatar sync issue (' + syncStage + '):', syncDetail);
+      showToast('Saved on this device only — ' + syncDetail + '.');
+    }
   } catch (e) {
     console.error('Profile photo error:', e);
     showToast('Could not use that image. Please try another.');

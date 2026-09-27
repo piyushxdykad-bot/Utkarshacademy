@@ -10446,6 +10446,7 @@ async function removeProfilePhoto() {
   .qz-overlay {
     position: fixed; inset: 0; z-index: 99999; background: var(--off-white);
     display: none; flex-direction: column; overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
     font-family: 'DM Sans', sans-serif; color: var(--text);
   }
   .qz-overlay.open { display: flex; }
@@ -10484,7 +10485,16 @@ async function removeProfilePhoto() {
   .qz-btn-outline:hover { background: var(--light-blue); }
 
   /* ---------- Runner screen ---------- */
-  .qz-runner { display: none; flex-direction: column; height: 100%; min-height: 100vh; position: relative; }
+  /* Was height:100% + min-height:100vh, which rigidly locked this column
+     to exactly one screen's height. Any question + its options taller
+     than that (long assertion-reason questions, 4+ line options, etc.)
+     then had nowhere to go — the extra content got clipped near the
+     bottom instead of properly extending the scrollable area, which is
+     why the last option/footer looked cut off with no way to scroll
+     further. min-height (not height) lets this box grow past one
+     screen when the content needs it, while still filling the full
+     screen when it doesn't. */
+  .qz-runner { display: none; flex-direction: column; min-height: 100%; position: relative; }
   .qz-runner.active { display: flex; }
   .qz-watermark {
     position: fixed; inset: 0; z-index: 90; pointer-events: none;

@@ -254,16 +254,16 @@ async function supaFetchMockLeaderboard(testName, limit) {
 async function supaUpsertProfile(avatarUrl) {
   try {
     const user = await supaGetUser();
-    if (!user) return false;
+    if (!user) return { ok: false, error: 'not signed in' };
     const { error } = await _supa.from('profiles').upsert({
       id: user.id,
       name: localStorage.getItem('ua_user_name') || null,
       avatar_url: avatarUrl,
       updated_at: new Date().toISOString()
     });
-    if (error) { console.warn('supaUpsertProfile failed (profiles table may not exist yet):', error); return false; }
-    return true;
-  } catch (e) { console.warn('supaUpsertProfile exception:', e); return false; }
+    if (error) { console.warn('supaUpsertProfile failed:', error); return { ok: false, error: error.message || JSON.stringify(error) }; }
+    return { ok: true };
+  } catch (e) { console.warn('supaUpsertProfile exception:', e); return { ok: false, error: (e && e.message) || String(e) }; }
 }
 
 // Batch-fetch avatar_url for a set of user_ids (e.g. everyone on one
@@ -10164,12 +10164,12 @@ async function handleProfilePhotoSelected(evt) {
           } else {
             await _supa.auth.updateUser({ data: { avatar_url: publicUrl } });
             localStorage.setItem('ua_user_photo_url', publicUrl);
-            const profileOk = await supaUpsertProfile(publicUrl);
-            if (profileOk) {
+            const profileResult = await supaUpsertProfile(publicUrl);
+            if (profileResult.ok) {
               syncStage = 'full';
             } else {
               syncStage = 'uploaded_only';
-              syncDetail = 'saved the photo, but couldn\'t add it to the leaderboard profile — check the "profiles" table exists with the right RLS policies';
+              syncDetail = 'saved the photo, but the leaderboard profile save failed — ' + (profileResult.error || 'unknown error');
             }
           }
         }

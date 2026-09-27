@@ -7304,11 +7304,6 @@ function heroEnrolledClassKeys() {
   });
   return keys;
 }
-// True once the student is confirmed/enrolled for the given classKey's
-// course — used to gate whether they can actually attempt a live mock.
-function heroClassKeyEnrolled(classKey) {
-  return heroEnrolledClassKeys().indexOf(classKey) > -1;
-}
 function getHeroLiveMocksItems() {
   const enrolledKeys = heroEnrolledClassKeys();
   // Enrolled students see live mocks for their own course(s); a guest or a
@@ -7330,17 +7325,11 @@ function getHeroLiveMocksItems() {
   });
   return items;
 }
-// Called when a visitor without access to a class's live mock taps the
-// hero's attempt button — sends them to log in, or to enroll if they're
-// already logged in but just haven't joined that course yet.
+// Called when a visitor who isn't logged in taps the hero's attempt
+// button — sends them to log in (no enrollment required to attend).
 function heroLockedMockClick(classKey) {
-  if (!isLoggedIn()) {
-    showPage('login');
-    showLoginPrompt('Log in to attend this live mock.');
-  } else {
-    showToast('Enroll in ' + (CLASS_LABELS[classKey] || 'this course') + ' to attend this live mock.');
-    heroExploreCourses();
-  }
+  showPage('login');
+  showLoginPrompt('Log in to attend this live mock.');
 }
 function renderHeroLiveMocks() {
   const scrollEl = document.getElementById('hlm-scroll-body');
@@ -7350,7 +7339,9 @@ function renderHeroLiveMocks() {
 
   const confirmed = (window._UA_MY_CONFIRMED || []).filter(function (s) { return !/mocks$|notes$/.test(s); });
   const courses = confirmed.filter(function (s) { return CLASS_LABELS.hasOwnProperty(s); });
-  if (subLineEl) subLineEl.textContent = courses.length ? 'For ' + courses.map(function (s) { return CLASS_LABELS[s]; }).join(' & ') : 'Log in & enroll to attend';
+  if (subLineEl) subLineEl.textContent = courses.length
+    ? 'For ' + courses.map(function (s) { return CLASS_LABELS[s]; }).join(' & ')
+    : (isLoggedIn() ? 'Live now — no enrollment needed' : 'Log in to attend — no enrollment needed');
 
   const items = getHeroLiveMocksItems();
   if (!items.length) {
@@ -7375,11 +7366,11 @@ function renderHeroLiveMocks() {
 
     const hasQuestions = isObj && qCount > 0;
     const attempted = hasQuestions && hasAttemptedQuiz('dayd', classKey, test);
-    const hasAccess = heroClassKeyEnrolled(classKey);
+    const hasAccess = isLoggedIn(); // any logged-in student can attend — no enrollment required
     let actionHtml;
     if (!hasAccess) {
-      // Visible to everyone, but a student without this course can't
-      // actually attempt it — tapping sends them to log in / enroll instead.
+      // Visible to every visitor, but only a logged-in student can actually
+      // attempt it — tapping sends a guest to log in first.
       actionHtml = '<button type="button" class="hlm-btn hlm-locked-btn" onclick="heroLockedMockClick(\'' + classKey + '\')"><i class="fas fa-lock"></i> Log In to Attend</button>';
     } else if (attempted) {
       actionHtml = '<button type="button" class="hlm-btn hlm-view-btn" onclick="viewQuizResult(\'dayd\', \'' + classKey + '\', \'' + _mchpEsc(test) + '\')"><i class="fas fa-chart-simple"></i> View Result</button>';

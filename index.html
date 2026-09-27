@@ -349,14 +349,16 @@ const UA_SYNCED_KEY_PREFIXES = [
 async function syncSaveState(dataKey, value) {
   try {
     const user = await supaGetUser();
-    if (!user) return;
-    await _supa.from('ua_student_state').upsert({
+    if (!user) { console.warn('[sync] syncSaveState skipped — no logged-in user for key:', dataKey); return; }
+    const { error } = await _supa.from('ua_student_state').upsert({
       user_id: user.id,
       data_key: dataKey,
       data_value: value,
       updated_at: new Date().toISOString()
     }, { onConflict: 'user_id,data_key' });
-  } catch (e) { /* offline/unavailable — local copy still stands */ }
+    if (error) { console.error('[sync] syncSaveState FAILED for key:', dataKey, error); }
+    else { console.log('[sync] syncSaveState OK for key:', dataKey); }
+  } catch (e) { console.error('[sync] syncSaveState THREW for key:', dataKey, e); }
 }
 
 // Removes every locally-cached value in the synced categories above.
@@ -381,13 +383,15 @@ function clearSyncedLocalData() {
 async function hydrateFromCloud() {
   try {
     const user = await supaGetUser();
-    if (!user) return;
+    if (!user) { console.warn('[sync] hydrateFromCloud skipped — no logged-in user'); return; }
     const { data, error } = await _supa.from('ua_student_state').select('data_key,data_value').eq('user_id', user.id);
-    if (error || !data) return;
+    if (error) { console.error('[sync] hydrateFromCloud FAILED:', error); return; }
+    if (!data) { console.warn('[sync] hydrateFromCloud got no data back'); return; }
+    console.log('[sync] hydrateFromCloud pulled', data.length, 'rows for user', user.id);
     data.forEach(function (row) {
       try { localStorage.setItem(row.data_key, JSON.stringify(row.data_value)); } catch (e) {}
     });
-  } catch (e) { /* offline — device just falls back to whatever it had locally */ }
+  } catch (e) { console.error('[sync] hydrateFromCloud THREW:', e); }
 }
 
 // Escape a value for safe use inside an HTML attribute/text position.

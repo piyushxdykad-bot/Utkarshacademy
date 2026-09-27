@@ -207,6 +207,15 @@ async function supaInsertContact(data) {
 }
 
 // Save quiz result
+// Builds the exact same test-name string used everywhere a mock/Day-D
+// attempt is identified by name (quiz_results.test_name, the AURA
+// leaderboard lookup, and the one-attempt-only check below). Keeping
+// this in one place stops the three call sites from ever drifting out
+// of sync with each other.
+function _quizTestName(subject, title) {
+  return (subject ? subject + ' — ' : '') + (title || 'Test');
+}
+
 async function supaInsertQuizResult(data) {
   const user = await supaGetUser();
   const { error } = await _supa.from('quiz_results').insert([{
@@ -220,8 +229,39 @@ async function supaInsertQuizResult(data) {
     skipped: data.skipped || 0,
     created_at: new Date().toISOString()
   }]);
+  // Postgres error code 23505 = unique_violation. With the
+  // quiz_results_one_attempt_per_user constraint in place, this means
+  // the student already has a scored attempt for this exact test —
+  // most likely a double-submit race (e.g. two tabs/devices finishing
+  // within the same instant). Treat it as "already attempted" rather
+  // than a generic failure.
+  if (error && error.code === '23505') return 'duplicate';
   if (error) return false;
-  return !error;
+  return true;
+}
+
+// Server-side truth check: has THIS account already scored an attempt
+// at this exact test, on ANY device? Backed by quiz_results, which is
+// written the moment a test is submitted — independent of whatever is
+// or isn't cached locally on the current device. Returns the existing
+// result row if so, false if not attempted yet, or null if the check
+// itself couldn't be completed (offline, not logged in, etc.) — callers
+// should let the student proceed in that last case rather than lock
+// them out over a network hiccup.
+async function hasAlreadyAttemptedOnServer(testName) {
+  try {
+    const user = await supaGetUser();
+    if (!user) return null;
+    const { data, error } = await _supa.from('quiz_results')
+      .select('score,total,correct,wrong,skipped,created_at')
+      .eq('user_id', user.id)
+      .eq('test_name', testName)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (error) { console.error('[attempt-lock] server check failed:', error); return null; }
+    return data || false;
+  } catch (e) { console.error('[attempt-lock] server check threw:', e); return null; }
 }
 
 // AURA leaderboard — every scored attempt of ONE specific mock (matched by
@@ -5035,11 +5075,22 @@ function startMockChapter(classKey, subject, chapter) {
 }
 // Launches a question-based CUET mock (Subject Wise section) in the real
 // test-taking flow: instructions -> timed runner -> scored results.
-function startQuizMock(classKey, idx) {
+// One attempt per account, enforced two ways: instantly from whatever's
+// cached on this device, and — for a device that's never seen this test
+// before — a live check against quiz_results, which every device writes
+// to the moment a test is submitted. That catches the case a student
+// already attempted this exact test on a different device.
+async function startQuizMock(classKey, idx) {
   const item = (MOCK_QUIZZES_DATA[classKey] || [])[idx];
   if (!item || !(item.questions || []).length) { showToast('This test has no questions yet.'); return; }
   const resultKey = item.subject + '::' + item.chapterName;
   if (hasAttemptedQuiz('mocks', classKey, resultKey)) { viewQuizResult('mocks', classKey, resultKey); return; }
+  const testName = _quizTestName(item.subject, item.chapterName);
+  const serverRow = await hasAlreadyAttemptedOnServer(testName);
+  if (serverRow) {
+    showToast('You have already attempted this test (on another device) — Score: ' + serverRow.score + '/' + serverRow.total + '.');
+    return;
+  }
   openQuizInstructions({
     classKey: classKey,
     source: 'mocks',
@@ -5050,8 +5101,9 @@ function startQuizMock(classKey, idx) {
     resultKey: resultKey
   });
 }
-// Launches a Day-D mock in the same real test-taking flow.
-function startDaydMock(classKey, idx) {
+// Launches a Day-D mock in the same real test-taking flow. Same
+// one-attempt-per-account enforcement as startQuizMock above.
+async function startDaydMock(classKey, idx) {
   const item = (DAYD_MOCKS_DATA[classKey] || [])[idx];
   const title = item && typeof item === 'object' ? (item.title || '') : item;
   if (!item || typeof item !== 'object' || !(item.questions || []).length) {
@@ -5059,6 +5111,12 @@ function startDaydMock(classKey, idx) {
     return;
   }
   if (hasAttemptedQuiz('dayd', classKey, title)) { viewQuizResult('dayd', classKey, title); return; }
+  const testName = _quizTestName('Day-D', title);
+  const serverRow = await hasAlreadyAttemptedOnServer(testName);
+  if (serverRow) {
+    showToast('You have already attempted this Day-D mock (on another device) — Score: ' + serverRow.score + '/' + serverRow.total + '.');
+    return;
+  }
   openQuizInstructions({
     classKey: classKey,
     source: 'dayd',
@@ -10920,13 +10978,21 @@ async function actuallySubmitQuiz(auto) {
   if (!userName) {
     try { const u = await supaGetUser(); if (u) userName = (u.user_metadata && u.user_metadata.name) || u.email || 'Guest'; } catch (e) {}
   }
+  let insertOutcome = false;
   try {
-    await supaInsertQuizResult({
+    insertOutcome = await supaInsertQuizResult({
       userName: userName || 'Guest',
-      testName: (q.meta.subject ? q.meta.subject + ' — ' : '') + (q.meta.title || 'Test'),
+      testName: _quizTestName(q.meta.subject, q.meta.title),
       score: score, total: totalMarks, correct: correct, wrong: wrong, skipped: skipped
     });
   } catch (e) { /* offline/RLS — result still shown locally */ }
+  if (insertOutcome === 'duplicate') {
+    // The database itself rejected this as a second scored attempt for
+    // this account (quiz_results_one_attempt_per_user) — most likely a
+    // near-simultaneous submit from another device/tab. Don't record a
+    // second local copy either; just show them their one real result.
+    showToast("You've already completed this test on another device.");
+  }
 
   const kind = q.meta.source === 'dayd' ? 'dayd' : 'mocks';
   const key = q.meta.resultKey || q.meta.title;
@@ -11002,7 +11068,7 @@ function _auraInitials(name) {
 // Same string supaInsertQuizResult() writes to test_name for this mock,
 // so the leaderboard only ever shows people who attempted THIS exact mock.
 function _auraTestNameFromMeta(meta) {
-  return (meta.subject ? meta.subject + ' — ' : '') + (meta.title || 'Test');
+  return _quizTestName(meta.subject, meta.title);
 }
 
 async function openAuraLeaderboard() {

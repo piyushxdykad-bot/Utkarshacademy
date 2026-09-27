@@ -264,6 +264,56 @@ async function hasAlreadyAttemptedOnServer(testName) {
   } catch (e) { console.error('[attempt-lock] server check threw:', e); return null; }
 }
 
+// ------------------------------------------------------------------
+// Server-side "already attempted" MAP — lets the Mocks/Day-D list
+// screens show the right button (Start vs View Result) even for a
+// test this exact device has never opened before, by consulting
+// quiz_results (reliable, cross-device) instead of only localStorage.
+// Loaded once per session, then reused synchronously by the render
+// functions below (a fresh page load re-fetches it).
+// ------------------------------------------------------------------
+window._UA_SERVER_ATTEMPTS = window._UA_SERVER_ATTEMPTS || {};
+let _UA_SERVER_ATTEMPTS_LOADED = false;
+async function refreshServerAttemptsMap() {
+  try {
+    const user = await supaGetUser();
+    if (!user) { window._UA_SERVER_ATTEMPTS = {}; _UA_SERVER_ATTEMPTS_LOADED = true; return; }
+    const { data, error } = await _supa.from('quiz_results')
+      .select('test_name,score,total,correct,wrong,skipped,created_at')
+      .eq('user_id', user.id);
+    if (error || !data) { _UA_SERVER_ATTEMPTS_LOADED = true; return; }
+    const map = {};
+    // Keep the earliest attempt per test_name (there should only ever
+    // be one, but this is a safe tiebreaker either way).
+    data.forEach(function (row) {
+      if (!map[row.test_name] || new Date(row.created_at) < new Date(map[row.test_name].created_at)) {
+        map[row.test_name] = row;
+      }
+    });
+    window._UA_SERVER_ATTEMPTS = map;
+    _UA_SERVER_ATTEMPTS_LOADED = true;
+  } catch (e) { _UA_SERVER_ATTEMPTS_LOADED = true; }
+}
+// Called at the top of each list-render function below. The first time
+// it runs this session it kicks off the (async) fetch and re-runs the
+// given render callback once it lands, so the Start/View Result labels
+// correct themselves in place without the student needing to refresh.
+function _ensureServerAttemptsThenRerender(rerenderFn) {
+  if (_UA_SERVER_ATTEMPTS_LOADED) return;
+  if (typeof isLoggedIn === 'function' && !isLoggedIn()) return;
+  refreshServerAttemptsMap().then(rerenderFn);
+}
+// Reconstructs the same test_name string used everywhere else, from
+// whatever a "View Result"/"Start" button already has on hand (kind +
+// resultKey), so callers never need to pass an extra argument.
+function _testNameFromKindAndKey(kind, key) {
+  if (kind === 'dayd') return _quizTestName('Day-D', key);
+  const parts = String(key).split('::');
+  const subject = parts.length > 1 ? parts[0] : '';
+  const title = parts.length > 1 ? parts.slice(1).join('::') : key;
+  return _quizTestName(subject, title);
+}
+
 // AURA leaderboard — every scored attempt of ONE specific mock (matched by
 // its exact test_name, the same string supaInsertQuizResult wrote), best
 // score first, ties broken by whoever finished first. Used by the "AURA"
@@ -4521,6 +4571,8 @@ _supa.auth.onAuthStateChange(async (event, session) => {
     // very first render after login already shows the synced data.
     clearSyncedLocalData();
     await hydrateFromCloud();
+    _UA_SERVER_ATTEMPTS_LOADED = false;
+    refreshServerAttemptsMap();
     localStorage.setItem('ua_logged_in', 'true');
     localStorage.setItem('ua_user_name', name);
     if (session.user.email) localStorage.setItem('ua_user_email', session.user.email);
@@ -4531,6 +4583,8 @@ _supa.auth.onAuthStateChange(async (event, session) => {
     localStorage.removeItem('ua_logged_in');
     localStorage.removeItem('ua_user_name');
     clearSyncedLocalData();
+    window._UA_SERVER_ATTEMPTS = {};
+    _UA_SERVER_ATTEMPTS_LOADED = false;
     if (typeof updateAuthUI === 'function') updateAuthUI();
   }
 });
@@ -5055,14 +5109,32 @@ function hasAttemptedQuiz(kind, classKey, key) { return !!getFullQuizResult(kind
 // cached result — same UI as right after submitting, just without a live
 // quiz session behind it.
 function viewQuizResult(kind, classKey, key) {
-  const stored = getFullQuizResult(kind, classKey, key);
-  if (!stored) return;
+  let stored = getFullQuizResult(kind, classKey, key);
+  if (!stored) {
+    // No full local review on this device (e.g. the test was attempted
+    // on a different device and the detailed sync hasn't landed here
+    // yet). Fall back to the score summary from quiz_results — which
+    // is reliably cross-device — so the student sees their result
+    // instead of the button silently doing nothing.
+    const testName = _testNameFromKindAndKey(kind, key);
+    const serverRow = window._UA_SERVER_ATTEMPTS && window._UA_SERVER_ATTEMPTS[testName];
+    if (!serverRow) { showToast('Could not load this result — please check your connection and try again.'); return; }
+    const parts = String(key).split('::');
+    stored = {
+      subject: kind === 'dayd' ? 'Day-D' : (parts.length > 1 ? parts[0] : ''),
+      title: kind === 'dayd' ? key : (parts.length > 1 ? parts.slice(1).join('::') : key),
+      score: serverRow.score, totalMarks: serverRow.total,
+      correct: serverRow.correct, wrong: serverRow.wrong, skipped: serverRow.skipped,
+      timeMin: 0, reviewRows: [], auto: false, _serverOnly: true
+    };
+  }
   window._UA_QUIZ = { meta: { classKey: classKey, source: kind, subject: stored.subject, title: stored.title, resultKey: key } };
   document.getElementById('qz-instr-screen').style.display = 'none';
   document.getElementById('qz-runner-screen').classList.remove('active');
   document.getElementById('qz-overlay').classList.add('open');
   document.body.style.overflow = 'hidden';
   renderQzResults(stored);
+  if (stored._serverOnly) showToast("Detailed question review isn't available on this device yet — showing your score summary.");
 }
 
 // Legacy placeholder path (CHAPTER_DATA is never populated by the admin
@@ -5573,6 +5645,7 @@ function buildTableHtml(rows) {
 function renderQuizSubjectGroup(containerId, classKey, items, mockType) {
   const el = document.getElementById(containerId);
   if (!el) return;
+  _ensureServerAttemptsThenRerender(function () { renderQuizSubjectGroup(containerId, classKey, items, mockType); });
   items = items || [];
   let entries = items.map(function (item, idx) { return { item: item, idx: idx }; });
   if (mockType) {
@@ -5603,7 +5676,8 @@ function renderQuizSubjectGroup(containerId, classKey, items, mockType) {
       metaBits.push(qCount + ' Qs');
       const meta = ' <span style="font-size:10.5px;color:var(--muted);font-weight:600;">(' + metaBits.join(', ') + (isPaid ? ', ' + (owned ? 'Purchased' : 'Paid') : '') + ')</span>';
       const resultKey = item.subject + '::' + item.chapterName;
-      const attempted = owned && hasAttemptedQuiz('mocks', classKey, resultKey);
+      const testName = _quizTestName(item.subject, item.chapterName);
+      const attempted = owned && (hasAttemptedQuiz('mocks', classKey, resultKey) || !!window._UA_SERVER_ATTEMPTS[testName]);
       const actionHtml = attempted
         ? '<button type="button" class="mchp-start-btn mchp-view-btn" onclick="viewQuizResult(\'mocks\', \'' + classKey + '\', \'' + _mchpEsc(resultKey) + '\')"><i class="fas fa-chart-simple"></i> View Result</button>'
         : owned
@@ -5636,6 +5710,7 @@ function daydIsLive(raw) {
 function renderDaydMocksSection(containerId, classKey, items, icon, unlocked) {
   const el = document.getElementById(containerId);
   if (!el) return;
+  _ensureServerAttemptsThenRerender(function () { renderDaydMocksSection(containerId, classKey, items, icon, unlocked); });
   const rows = [];
   (items || []).forEach(function (raw, idx) { if (daydIsLive(raw)) rows.push({ raw: raw, idx: idx }); });
   if (!rows.length) {
@@ -5657,7 +5732,8 @@ function renderDaydMocksSection(containerId, classKey, items, icon, unlocked) {
     if (qCount) metaBits.push(qCount + ' Qs');
     const meta = metaBits.length ? ' <span style="font-size:10.5px;color:var(--muted);font-weight:600;">(' + metaBits.join(', ') + ')</span>' : '';
     const hasQuestions = isObj && qCount > 0;
-    const attempted = hasQuestions && hasAttemptedQuiz('dayd', classKey, test);
+    const testName = _quizTestName('Day-D', test);
+    const attempted = hasQuestions && (hasAttemptedQuiz('dayd', classKey, test) || !!window._UA_SERVER_ATTEMPTS[testName]);
     let actionHtml;
     if (attempted) {
       actionHtml = '<button type="button" class="mchp-start-btn mchp-view-btn" onclick="viewQuizResult(\'dayd\', \'' + classKey + '\', \'' + _mchpEsc(test) + '\')"><i class="fas fa-chart-simple"></i> View Result</button>';
@@ -5680,6 +5756,7 @@ function renderDaydMocksSection(containerId, classKey, items, icon, unlocked) {
 function renderPreviousDoseSection(containerId, classKey, items, icon) {
   const el = document.getElementById(containerId);
   if (!el) return;
+  _ensureServerAttemptsThenRerender(function () { renderPreviousDoseSection(containerId, classKey, items, icon); });
   const rows = [];
   (items || []).forEach(function (raw, idx) { if (!daydIsLive(raw)) rows.push({ raw: raw, idx: idx }); });
   if (!rows.length) {
@@ -5701,7 +5778,8 @@ function renderPreviousDoseSection(containerId, classKey, items, icon) {
     const meta = metaBits.length ? ' <span style="font-size:10.5px;color:var(--muted);font-weight:600;">(' + metaBits.join(', ') + ')</span>' : '';
     const hasQuestions = isObj && qCount > 0;
     const purchased = isMockPurchased(classKey, 'Previous Dose', test);
-    const attempted = hasQuestions && hasAttemptedQuiz('dayd', classKey, test);
+    const testName = _quizTestName('Day-D', test);
+    const attempted = hasQuestions && (hasAttemptedQuiz('dayd', classKey, test) || !!window._UA_SERVER_ATTEMPTS[testName]);
     let actionHtml;
     if (!hasQuestions) {
       actionHtml = '<a class="mchp-start-btn" href="javascript:void(0)" onclick="startDaydMock(\'' + classKey + '\', ' + idx + ')"><i class="fas fa-play"></i> Start</a>';

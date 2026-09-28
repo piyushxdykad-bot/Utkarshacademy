@@ -147,6 +147,10 @@ async function supaSignIn(email, password) {
 
 // Sign Out
 async function supaSignOut() {
+  // Free this account's single-device lock BEFORE the session is destroyed
+  // (the RPC needs a valid session), so the student can log in elsewhere.
+  uaStopHeartbeat();
+  try { await _supa.rpc('release_session', { p_device_id: uaGetDeviceId() }); } catch (e) {}
   await _supa.auth.signOut();
   localStorage.removeItem('ua_logged_in');
   localStorage.removeItem('ua_user_name');
@@ -158,6 +162,116 @@ async function supaGetUser() {
   const { data: { user } } = await _supa.auth.getUser();
   return user;
 }
+
+// ============================================================
+//  SINGLE-DEVICE LOGIN
+//  One account can be active on ONE device at a time. The lock lives in
+//  the "user_sessions" table (see single_device_login.sql) and is taken /
+//  refreshed atomically by the claim_session() database function.
+//  - A different device trying to log in while the lock is live is
+//    rejected, signed out locally and shown a popup.
+//  - The active device refreshes the lock every 30s. If it stops (tab
+//    closed, phone off, no internet) the lock expires after 2 minutes.
+// ============================================================
+const UA_HEARTBEAT_MS = 30000;
+let _uaHeartbeatTimer = null;
+let _uaAccessToken = null;
+let _uaBlocking = false;
+
+function uaGetDeviceId() {
+  let id = localStorage.getItem('ua_device_id');
+  if (!id) {
+    id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+       : (Date.now().toString(36) + Math.random().toString(36).slice(2));
+    localStorage.setItem('ua_device_id', id);
+  }
+  return id;
+}
+
+// true  = this device owns (or just took) the lock
+// false = another device is active on this account
+// If the check itself fails (offline / SQL not installed) we fail open so
+// the site never locks genuine students out because of a technical fault.
+async function uaClaimSession() {
+  try {
+    const { data, error } = await _supa.rpc('claim_session', {
+      p_device_id: uaGetDeviceId(),
+      p_device_info: (navigator.userAgent || '').slice(0, 200)
+    });
+    if (error) { console.warn('[single-device] claim_session error (allowing):', error.message); return true; }
+    return data === true;
+  } catch (e) { return true; }
+}
+
+function uaShowDeviceLimitPopup(message) {
+  if (document.getElementById('ua-device-limit-modal')) return;
+  const wrap = document.createElement('div');
+  wrap.id = 'ua-device-limit-modal';
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:2147483000;background:rgba(6,16,45,.72);display:flex;align-items:center;justify-content:center;padding:20px;font-family:"DM Sans",sans-serif;';
+  wrap.innerHTML =
+    '<div style="background:#fff;border-radius:20px;max-width:400px;width:100%;padding:32px 28px;text-align:center;box-shadow:0 30px 80px rgba(0,0,0,.45);">' +
+      '<div style="width:64px;height:64px;border-radius:50%;background:#fee2e2;color:#dc2626;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 16px;"><i class="fas fa-mobile-alt"></i></div>' +
+      '<h3 style="margin:0 0 10px;font-size:20px;color:#0d2b6b;font-family:\'Playfair Display\',serif;">Already logged in on another device</h3>' +
+      '<p style="margin:0 0 22px;font-size:14.5px;line-height:1.6;color:#475569;"></p>' +
+      '<button type="button" style="width:100%;padding:13px;border:none;border-radius:50px;background:linear-gradient(135deg,#0d2b6b,#1a4bbd);color:#fff;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;">OK, I understand</button>' +
+    '</div>';
+  wrap.querySelector('p').textContent = message ||
+    'This account is currently active on another device. Please log out there first, then try again. (If you just closed it, wait about 2 minutes.)';
+  wrap.querySelector('button').onclick = function () { wrap.remove(); };
+  document.body.appendChild(wrap);
+}
+
+// Rejects THIS device only. scope:'local' is essential — the default
+// (global) would also kill the legitimate session on the other device.
+async function uaBlockThisDevice(message) {
+  if (_uaBlocking) return;
+  _uaBlocking = true;
+  try {
+    uaStopHeartbeat();
+    try { await _supa.auth.signOut({ scope: 'local' }); } catch (e) {}
+    localStorage.removeItem('ua_logged_in');
+    localStorage.removeItem('ua_user_name');
+    localStorage.removeItem('ua_user_email');
+    if (typeof clearSyncedLocalData === 'function') clearSyncedLocalData();
+    if (typeof updateAuthUI === 'function') { try { updateAuthUI(); } catch (e) {} }
+    if (typeof showPage === 'function') { try { showPage('login'); } catch (e) {} }
+    uaShowDeviceLimitPopup(message);
+  } finally { _uaBlocking = false; }
+}
+
+function uaStopHeartbeat() {
+  if (_uaHeartbeatTimer) { clearInterval(_uaHeartbeatTimer); _uaHeartbeatTimer = null; }
+}
+
+async function uaHeartbeatTick() {
+  const { data: { session } } = await _supa.auth.getSession();
+  if (!session) { uaStopHeartbeat(); return; }
+  const ok = await uaClaimSession();
+  if (!ok) await uaBlockThisDevice('Your account was signed in on another device, so you have been logged out here.');
+}
+
+function uaStartHeartbeat() {
+  uaStopHeartbeat();
+  _uaHeartbeatTimer = setInterval(uaHeartbeatTick, UA_HEARTBEAT_MS);
+}
+
+// Coming back to a backgrounded tab: re-check immediately.
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState === 'visible' && _uaHeartbeatTimer) uaHeartbeatTick();
+});
+
+// Tab/browser really closing: free the lock right away (best effort; the
+// 2-minute expiry covers cases where this can't run, e.g. phone battery dies).
+window.addEventListener('pagehide', function (e) {
+  if (e.persisted || !_uaAccessToken) return;
+  try {
+    fetch(SUPABASE_URL + '/rest/v1/rpc/release_session', {
+      method: 'POST', keepalive: true,
+      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization': 'Bearer ' + _uaAccessToken },
+      body: JSON.stringify({ p_device_id: uaGetDeviceId() })
+    });
+  } catch (err) {}
+});
 
 // ============================================================
 //  DATABASE HELPERS — saves student leads to Supabase
@@ -4557,11 +4671,22 @@ async function signInWithGoogle() {
 // the site as "logged in" (the admin isn't a student and has no student
 // data, so the normal student UI should stay logged-out for that account).
 _supa.auth.onAuthStateChange(async (event, session) => {
+  _uaAccessToken = session ? session.access_token : null;
+  if (event === 'INITIAL_SESSION' && session && session.user && !_uaBlocking) {
+    // Page load with a saved session: re-verify this device still owns the lock.
+    setTimeout(async function () {
+      if (await uaClaimSession()) uaStartHeartbeat();
+      else await uaBlockThisDevice();
+    }, 0);
+  }
   if (event === 'SIGNED_IN' && session && session.user) {
     try {
       const { data: adminRow } = await _supa.from('admin_users').select('user_id').eq('user_id', session.user.id).maybeSingle();
       if (adminRow) return; // admin session — leave the site's student UI logged-out
     } catch (e) { /* admin_users not set up yet — treat as a normal student login */ }
+    // SINGLE-DEVICE CHECK — must pass before this device is marked logged in.
+    if (!(await uaClaimSession())) { await uaBlockThisDevice(); return; }
+    uaStartHeartbeat();
     const name = session.user.user_metadata?.full_name
       || session.user.user_metadata?.name
       || (session.user.email ? session.user.email.split('@')[0] : 'Student');
@@ -4581,6 +4706,7 @@ _supa.auth.onAuthStateChange(async (event, session) => {
     if (typeof renderStudentDashboard === 'function') { try { renderStudentDashboard(); } catch (e) {} }
   }
   if (event === 'SIGNED_OUT') {
+    uaStopHeartbeat();
     localStorage.removeItem('ua_logged_in');
     localStorage.removeItem('ua_user_name');
     clearSyncedLocalData();
@@ -7625,6 +7751,16 @@ async function handleLogin() {
     if (err) { err.textContent = error.message; err.style.display = 'block'; }
     return;
   }
+
+  // SINGLE-DEVICE CHECK: if this account is already active on another
+  // device, reject this login and show the popup.
+  if (!(await uaClaimSession())) {
+    btn.innerHTML = '<i class="fas fa-sign-in-alt"></i> Sign In';
+    btn.disabled = false;
+    await uaBlockThisDevice();
+    return;
+  }
+  uaStartHeartbeat();
 
   const name = data.user?.user_metadata?.name || email.split('@')[0];
   localStorage.setItem('ua_logged_in', 'true');

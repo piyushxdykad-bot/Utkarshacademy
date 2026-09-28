@@ -10609,6 +10609,13 @@ async function removeProfilePhoto() {
   .qz-confirm-stat .n { font-size: 20px; font-weight: 800; }
   .qz-confirm-stat .l { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
   .qz-confirm-btns { display: flex; gap: 10px; }
+  .qz-warn-modal { position: fixed; inset: 0; z-index: 100020; background: rgba(10,26,64,0.72); display: none; align-items: center; justify-content: center; padding: 20px; }
+  .qz-warn-modal.open { display: flex; }
+  .qz-warn-box { background: white; border-radius: 16px; padding: 26px 22px; max-width: 400px; width: 100%; text-align: center; border-top: 5px solid #e5484d; }
+  .qz-warn-box .qz-warn-ico { font-size: 34px; color: #e5484d; margin-bottom: 8px; }
+  .qz-warn-box h3 { font-size: 18px; color: #c0272d; margin-bottom: 8px; }
+  .qz-warn-box p { font-size: 13.5px; color: var(--text); line-height: 1.55; margin-bottom: 10px; }
+  .qz-warn-box .qz-warn-left { display: inline-block; background: #fdecec; color: #c0272d; font-weight: 800; font-size: 12.5px; padding: 5px 12px; border-radius: 20px; margin-bottom: 16px; }
 
   /* ---------- Results screen ---------- */
   .qz-results { display: none; flex-direction: column; }
@@ -10728,6 +10735,7 @@ async function removeProfilePhoto() {
         <li>You may navigate freely between questions using the question palette.</li>
         <li>The test will auto-submit when the timer reaches zero.</li>
         <li>Do not refresh or close this tab while the test is in progress.</li>
+        <li><b>Do not switch tabs/apps, leave the screen, exit full-screen (desktop), press Back, or take a screenshot.</b> You get <b id="qz-instr-warn-count">2</b> warnings — after that your test is <b>submitted automatically</b>.</li>
       </ul>
     </div>
     <label class="qz-decl">
@@ -10833,6 +10841,16 @@ async function removeProfilePhoto() {
 </div>
 
 <!-- Submit confirmation modal -->
+<div class="qz-warn-modal" id="qz-warn-modal">
+  <div class="qz-warn-box">
+    <div class="qz-warn-ico"><i class="fas fa-triangle-exclamation"></i></div>
+    <h3 id="qz-warn-title">Warning!</h3>
+    <p id="qz-warn-msg"></p>
+    <div class="qz-warn-left" id="qz-warn-left"></div>
+    <button class="qz-btn qz-btn-primary" style="width:100%;" onclick="qzContinueAfterWarning()">I Understand, Continue Test</button>
+  </div>
+</div>
+
 <div class="qz-confirm-modal" id="qz-confirm-modal">
   <div class="qz-confirm-box">
     <h3><i class="fas fa-circle-question"></i> Submit the test?</h3>
@@ -10885,6 +10903,7 @@ function openQuizInstructions(meta) {
   document.getElementById('qz-instr-sub').textContent = (meta.subject ? meta.subject + ' — ' : '') + 'Read the instructions carefully before you begin.';
   document.getElementById('qz-instr-qcount').textContent = questions.length;
   document.getElementById('qz-instr-duration').textContent = meta.duration ? (meta.duration + ' minutes') : 'No time limit';
+  var _wc = document.getElementById('qz-instr-warn-count'); if (_wc) _wc.textContent = QZ_MAX_WARNINGS;
   document.getElementById('qz-decl-check').checked = false;
   document.getElementById('qz-instr-start').disabled = true;
 
@@ -10899,6 +10918,7 @@ function closeQuizOverlay() {
   const q = window._UA_QUIZ;
   if (q && q.timerId) clearInterval(q.timerId);
   qzReleaseExitLock();
+  qzReleaseProctor();
   if (q && q.screenGuard) _uaGuardRelease(q.screenGuard, document.getElementById('qz-runner-screen'), document.getElementById('qz-guard-notice'));
   document.getElementById('qz-overlay').classList.remove('open');
   document.body.style.overflow = '';
@@ -10922,11 +10942,7 @@ function qzPopStateHandler(e) {
   if (!window._UA_QUIZ) return; // test already ended, let navigation proceed
   // Immediately re-push a state so the URL/history never actually moves back.
   history.pushState({ uaQuizLock: true }, '', location.href);
-  if (typeof showToast === 'function') {
-    showToast('Please submit your test before leaving this page.');
-  } else {
-    alert('Please submit your test before leaving this page.');
-  }
+  qzRegisterViolation('back');
 }
 function qzEngageExitLock() {
   window.addEventListener('beforeunload', qzBeforeUnloadHandler);
@@ -10938,6 +10954,92 @@ function qzReleaseExitLock() {
   window.removeEventListener('popstate', qzPopStateHandler);
 }
 
+/* ── Proctoring: warnings, then auto-submit ──
+   Any of: switching tab/app, leaving the screen (window loses focus),
+   pressing Back, or a screenshot shortcut counts as a violation.
+   The first QZ_MAX_WARNINGS violations show a warning popup; the next
+   one auto-submits the test. Change QZ_MAX_WARNINGS to tune it. */
+const QZ_MAX_WARNINGS = 2;
+const QZ_VIOLATION_TEXT = {
+  tab: 'You switched to another tab or app.',
+  blur: 'You left the test screen.',
+  back: 'You pressed the Back button.',
+  shot: 'A screenshot attempt was detected.',
+  fs: 'You exited full-screen mode.'
+};
+function qzRegisterViolation(kind) {
+  const q = window._UA_QUIZ;
+  if (!q || !q.startedAt || q.submitted) return;
+  const now = Date.now();
+  if (now - q.startedAt < 1500) return;                 // ignore start-up noise
+  if (q.lastViolationAt && now - q.lastViolationAt < 1200) return; // blur+visibility fire together
+  q.lastViolationAt = now;
+  q.violations = (q.violations || 0) + 1;
+  if (q.violations > QZ_MAX_WARNINGS) {
+    qzCloseWarning();
+    if (typeof showToast === 'function') showToast('Test auto-submitted due to repeated rule violations.');
+    actuallySubmitQuiz(true, 'violation');
+    return;
+  }
+  const left = QZ_MAX_WARNINGS - q.violations;
+  document.getElementById('qz-warn-title').textContent = 'Warning ' + q.violations + ' of ' + QZ_MAX_WARNINGS;
+  document.getElementById('qz-warn-msg').textContent = (QZ_VIOLATION_TEXT[kind] || 'Rule violation detected.')
+    + ' Switching screens, leaving the test, going back or taking screenshots is not allowed. If you do this again, your test will be submitted automatically.';
+  document.getElementById('qz-warn-left').textContent = left > 0
+    ? left + ' warning' + (left > 1 ? 's' : '') + ' left before auto-submit'
+    : 'Last warning — next violation auto-submits your test';
+  document.getElementById('qz-warn-modal').classList.add('open');
+}
+/* Desktop/Mac: the test runs full-screen. Browsers can't block Alt+Tab / Cmd+Tab,
+   but leaving full-screen or switching away is detected and counted. */
+function qzIsDesktop() { return window.matchMedia && window.matchMedia('(pointer: fine)').matches && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent); }
+function qzInFullscreen() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+function qzEnterFullscreen() {
+  if (!qzIsDesktop() || qzInFullscreen()) return;
+  const el = document.documentElement;
+  try {
+    const p = (el.requestFullscreen || el.webkitRequestFullscreen || function () {}).call(el);
+    if (p && p.then) p.then(function () {
+      // Chrome/Edge: stop Esc from exiting full-screen
+      if (navigator.keyboard && navigator.keyboard.lock) navigator.keyboard.lock(['Escape']).catch(function () {});
+    }).catch(function () {});
+  } catch (e) {}
+}
+function qzExitFullscreen() {
+  try { if (navigator.keyboard && navigator.keyboard.unlock) navigator.keyboard.unlock(); } catch (e) {}
+  try { if (qzInFullscreen()) (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {}
+}
+function qzOnFsChange() { if (!qzInFullscreen() && qzIsDesktop()) qzRegisterViolation('fs'); }
+function qzContinueAfterWarning() { qzCloseWarning(); qzEnterFullscreen(); }
+function qzCloseWarning() { const m = document.getElementById('qz-warn-modal'); if (m) m.classList.remove('open'); }
+function qzOnVis() { if (document.hidden) qzRegisterViolation('tab'); }
+function qzOnBlur() { if (!document.hidden) qzRegisterViolation('blur'); }
+function qzOnKey(e) {
+  const k = (e.key || '').toLowerCase();
+  const mac = e.metaKey && e.shiftKey && (k === '3' || k === '4' || k === '5' || e.code === 'Digit3' || e.code === 'Digit4' || e.code === 'Digit5');
+  const win = e.metaKey && e.shiftKey && k === 's';
+  if (e.key === 'PrintScreen' || mac || win) qzRegisterViolation('shot');
+}
+function qzEngageProctor() {
+  document.addEventListener('visibilitychange', qzOnVis);
+  window.addEventListener('blur', qzOnBlur);
+  window.addEventListener('keydown', qzOnKey, true);
+  window.addEventListener('keyup', qzOnKey, true);
+  document.addEventListener('fullscreenchange', qzOnFsChange);
+  document.addEventListener('webkitfullscreenchange', qzOnFsChange);
+  qzEnterFullscreen();
+}
+function qzReleaseProctor() {
+  document.removeEventListener('visibilitychange', qzOnVis);
+  window.removeEventListener('blur', qzOnBlur);
+  window.removeEventListener('keydown', qzOnKey, true);
+  window.removeEventListener('keyup', qzOnKey, true);
+  document.removeEventListener('fullscreenchange', qzOnFsChange);
+  document.removeEventListener('webkitfullscreenchange', qzOnFsChange);
+  qzExitFullscreen();
+  qzCloseWarning();
+}
+
 function startQuizRunner() {
   const q = window._UA_QUIZ;
   if (!q) return;
@@ -10946,6 +11048,7 @@ function startQuizRunner() {
   document.getElementById('qz-runner-screen').classList.add('active');
   document.getElementById('qz-runner-title').textContent = q.meta.title || 'Test';
   qzEngageExitLock();
+  qzEngageProctor();
   q.screenGuard = _uaGuardEngage(document.getElementById('qz-runner-screen'), document.getElementById('qz-guard-notice'));
   _uaWatermarkText().then(function (text) { _uaRenderWatermark(document.getElementById('qz-watermark'), text); });
 
@@ -11081,12 +11184,14 @@ function confirmSubmitQuiz() {
 }
 function closeQzConfirm() { document.getElementById('qz-confirm-modal').classList.remove('open'); }
 
-async function actuallySubmitQuiz(auto) {
+async function actuallySubmitQuiz(auto, reason) {
   closeQzConfirm();
   const q = window._UA_QUIZ;
-  if (!q) return;
+  if (!q || q.submitted) return;
+  q.submitted = true;
   if (q.timerId) clearInterval(q.timerId);
   qzReleaseExitLock();
+  qzReleaseProctor();
   if (q.screenGuard) _uaGuardRelease(q.screenGuard, document.getElementById('qz-runner-screen'), document.getElementById('qz-guard-notice'));
 
   const questions = q.meta.questions;
@@ -11136,7 +11241,7 @@ async function actuallySubmitQuiz(auto) {
   // Cache the full scored result (incl. per-question review) against this
   // resultKey so the test can't be retaken — the list button becomes
   // "View Result" and reopens this exact result via viewQuizResult().
-  const resultData = { subject: q.meta.subject, title: q.meta.title, score: score, totalMarks: totalMarks, correct: correct, wrong: wrong, skipped: skipped, timeMin: timeMin, reviewRows: reviewRows, auto: !!auto };
+  const resultData = { subject: q.meta.subject, title: q.meta.title, score: score, totalMarks: totalMarks, correct: correct, wrong: wrong, skipped: skipped, timeMin: timeMin, reviewRows: reviewRows, auto: !!auto, autoReason: reason || '' };
   if (typeof saveFullQuizResult === 'function') saveFullQuizResult(kind, q.meta.classKey, key, resultData);
 
   renderQzResults(resultData);
@@ -11151,7 +11256,7 @@ function renderQzResults(r) {
   document.getElementById('qz-results-screen').classList.add('active');
   const q = window._UA_QUIZ;
 
-  document.getElementById('qz-results-title').textContent = (q.meta.subject ? q.meta.subject + ' — ' : '') + (q.meta.title || 'Test') + (r.auto ? ' (auto-submitted)' : '');
+  document.getElementById('qz-results-title').textContent = (q.meta.subject ? q.meta.subject + ' — ' : '') + (q.meta.title || 'Test') + (r.auto ? (r.autoReason === 'violation' ? ' (auto-submitted: rule violation)' : ' (auto-submitted)') : '');
   document.getElementById('qz-results-score').textContent = r.score;
   document.getElementById('qz-results-outof').textContent = 'out of ' + r.totalMarks;
   const attempted = r.correct + r.wrong;

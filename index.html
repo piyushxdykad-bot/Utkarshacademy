@@ -540,6 +540,7 @@ const UA_SYNCED_KEY_PREFIXES = [
   'ua_progress_',            // lectures/mocks/dayd "attempted" tracking
   'ua_mock_results_',        // per-mock correct/wrong/time summaries
   'ua_quiz_full_result_',    // full scored review of a completed test
+  'ua_quiz_reattempts_',     // how many practice reattempts a student has used per mock
   'ua_mock_purchases_',      // individually-bought mocks (₹40 each)
   'ua_note_purchases_',      // individually-bought notes chapters (₹60 each)
   'ua_my_notes_',            // student's own "Create Your Notes" text
@@ -5232,6 +5233,27 @@ function getFullQuizResult(kind, classKey, key) {
   } catch (e) { return null; }
 }
 function hasAttemptedQuiz(kind, classKey, key) { return !!getFullQuizResult(kind, classKey, key); }
+
+// ----- Reattempts (practice only) -----
+// After the first (scored, leaderboard) attempt a student may retake a
+// question-based mock up to QUIZ_MAX_REATTEMPTS more times. Reattempts are
+// never written to quiz_results (the leaderboard's only source), never
+// replace the stored first-attempt result, and don't touch dashboard stats.
+const QUIZ_MAX_REATTEMPTS = 2;
+function _reattemptKey(kind, classKey, key) { return 'ua_quiz_reattempts_' + kind + '_' + classKey + '_' + key; }
+function getQuizReattemptCount(kind, classKey, key) {
+  try { return Number(JSON.parse(localStorage.getItem(_reattemptKey(kind, classKey, key)) || '0')) || 0; }
+  catch (e) { return 0; }
+}
+function bumpQuizReattemptCount(kind, classKey, key) {
+  const n = getQuizReattemptCount(kind, classKey, key) + 1;
+  try { localStorage.setItem(_reattemptKey(kind, classKey, key), JSON.stringify(n)); } catch (e) {}
+  syncSaveState(_reattemptKey(kind, classKey, key), n);
+  return n;
+}
+function quizReattemptsLeft(kind, classKey, key) {
+  return Math.max(0, QUIZ_MAX_REATTEMPTS - getQuizReattemptCount(kind, classKey, key));
+}
 // Reopens the results screen straight to a previously-submitted test's
 // cached result — same UI as right after submitting, just without a live
 // quiz session behind it.
@@ -5298,6 +5320,30 @@ async function startQuizMock(classKey, idx) {
     duration: item.duration || null,
     questions: item.questions,
     resultKey: resultKey
+  });
+}
+// Practice reattempt of a question-based mock the student has already
+// scored once. Not counted on the leaderboard (see actuallySubmitQuiz).
+async function reattemptQuizMock(classKey, idx) {
+  const item = (MOCK_QUIZZES_DATA[classKey] || [])[idx];
+  if (!item || !(item.questions || []).length) { showToast('This test has no questions yet.'); return; }
+  const resultKey = item.subject + '::' + item.chapterName;
+  const testName = _quizTestName(item.subject, item.chapterName);
+  if (!hasAttemptedQuiz('mocks', classKey, resultKey) && !(window._UA_SERVER_ATTEMPTS && window._UA_SERVER_ATTEMPTS[testName])) {
+    showToast('Attempt this test once first.'); return;
+  }
+  if (quizReattemptsLeft('mocks', classKey, resultKey) <= 0) {
+    showToast('You have used all ' + QUIZ_MAX_REATTEMPTS + ' reattempts for this test.'); return;
+  }
+  openQuizInstructions({
+    classKey: classKey,
+    source: 'mocks',
+    subject: item.subject,
+    title: item.chapterName,
+    duration: item.duration || null,
+    questions: item.questions,
+    resultKey: resultKey,
+    reattempt: true
   });
 }
 // Launches a Day-D mock in the same real test-taking flow. Same
@@ -5796,8 +5842,14 @@ function quizMockRowHtml(classKey, row) {
   const resultKey = item.subject + '::' + item.chapterName;
   const testName = _quizTestName(item.subject, item.chapterName);
   const attempted = owned && (hasAttemptedQuiz('mocks', classKey, resultKey) || !!window._UA_SERVER_ATTEMPTS[testName]);
+  const reLeft = quizReattemptsLeft('mocks', classKey, resultKey);
+  const reBtn = attempted
+    ? (reLeft > 0
+        ? '<button type="button" class="mchp-start-btn" style="background:#eef2ff;color:#2a4bc4;border:1px solid #c9d4f5;cursor:pointer;" title="Practice again — not counted on the leaderboard" onclick="reattemptQuizMock(\'' + classKey + '\', ' + row.idx + ')"' + (qCount ? '' : ' disabled') + '><i class="fas fa-rotate-right"></i> Reattempt <span style="font-size:10.5px;font-weight:700;opacity:.8;">(' + reLeft + ' left)</span></button>'
+        : '<span class="mchp-locked-btn" style="cursor:default;" title="You have used all reattempts"><i class="fas fa-rotate-right"></i> No reattempts left</span>')
+    : '';
   const actionHtml = attempted
-    ? '<button type="button" class="mchp-start-btn mchp-view-btn" onclick="viewQuizResult(\'mocks\', \'' + classKey + '\', \'' + _mchpEsc(resultKey) + '\')"><i class="fas fa-chart-simple"></i> View Result</button>'
+    ? reBtn + '<button type="button" class="mchp-start-btn mchp-view-btn" onclick="viewQuizResult(\'mocks\', \'' + classKey + '\', \'' + _mchpEsc(resultKey) + '\')"><i class="fas fa-chart-simple"></i> View Result</button>'
     : owned
       ? '<button type="button" class="mchp-start-btn" onclick="startQuizMock(\'' + classKey + '\', ' + row.idx + ')"' + (qCount ? '' : ' disabled title="No questions added yet"') + '><i class="fas fa-play"></i> Start</button>'
       : '<button type="button" class="mchp-buy-btn" onclick="openMockBuyModal(\'' + classKey + '\', \'' + escAttrPublic(item.subject).replace(/'/g, "\\'") + '\', \'' + escAttrPublic(item.chapterName).replace(/'/g, "\\'") + '\', ' + (Number(item.price) || MOCK_PRICE) + ')"><i class="fas fa-lock"></i> Pay ₹' + (Number(item.price) || MOCK_PRICE) + ' &amp; Unlock</button>';
@@ -11211,6 +11263,10 @@ function startQuizRunner() {
   const q = window._UA_QUIZ;
   if (!q) return;
   q.startedAt = Date.now();
+  if (q.meta.reattempt && !q._reattemptCounted) {
+    q._reattemptCounted = true;
+    bumpQuizReattemptCount('mocks', q.meta.classKey, q.meta.resultKey || q.meta.title);
+  }
   document.getElementById('qz-instr-screen').style.display = 'none';
   document.getElementById('qz-runner-screen').classList.add('active');
   document.getElementById('qz-runner-title').textContent = q.meta.title || 'Test';
@@ -11382,9 +11438,10 @@ async function actuallySubmitQuiz(auto, reason) {
   if (!userName) {
     try { const u = await supaGetUser(); if (u) userName = (u.user_metadata && u.user_metadata.name) || u.email || 'Guest'; } catch (e) {}
   }
+  const isReattempt = !!q.meta.reattempt;
   let insertOutcome = false;
   try {
-    insertOutcome = await supaInsertQuizResult({
+    if (!isReattempt) insertOutcome = await supaInsertQuizResult({
       userName: userName || 'Guest',
       testName: _quizTestName(q.meta.subject, q.meta.title),
       score: score, total: totalMarks, correct: correct, wrong: wrong, skipped: skipped
@@ -11400,8 +11457,8 @@ async function actuallySubmitQuiz(auto, reason) {
 
   const kind = q.meta.source === 'dayd' ? 'dayd' : 'mocks';
   const key = q.meta.resultKey || q.meta.title;
-  if (typeof _addProgressItem === 'function') _addProgressItem(kind, q.meta.classKey, key);
-  if (typeof _recordRealMockResult === 'function') {
+  if (!isReattempt && typeof _addProgressItem === 'function') _addProgressItem(kind, q.meta.classKey, key);
+  if (!isReattempt && typeof _recordRealMockResult === 'function') {
     _recordRealMockResult(kind, q.meta.classKey, key, { total: questions.length, correct: correct, wrong: wrong, timeMin: timeMin });
   }
 
@@ -11409,7 +11466,10 @@ async function actuallySubmitQuiz(auto, reason) {
   // resultKey so the test can't be retaken — the list button becomes
   // "View Result" and reopens this exact result via viewQuizResult().
   const resultData = { subject: q.meta.subject, title: q.meta.title, score: score, totalMarks: totalMarks, correct: correct, wrong: wrong, skipped: skipped, timeMin: timeMin, reviewRows: reviewRows, auto: !!auto, autoReason: reason || '' };
-  if (typeof saveFullQuizResult === 'function') saveFullQuizResult(kind, q.meta.classKey, key, resultData);
+  if (isReattempt) {
+    resultData.reattempt = true;
+    showToast("Reattempt finished — it isn't counted on the leaderboard. Your first result is kept.");
+  } else if (typeof saveFullQuizResult === 'function') saveFullQuizResult(kind, q.meta.classKey, key, resultData);
 
   renderQzResults(resultData);
 
@@ -11423,7 +11483,7 @@ function renderQzResults(r) {
   document.getElementById('qz-results-screen').classList.add('active');
   const q = window._UA_QUIZ;
 
-  document.getElementById('qz-results-title').textContent = (q.meta.subject ? q.meta.subject + ' — ' : '') + (q.meta.title || 'Test') + (r.auto ? (r.autoReason === 'violation' ? ' (auto-submitted: rule violation)' : ' (auto-submitted)') : '');
+  document.getElementById('qz-results-title').textContent = (q.meta.subject ? q.meta.subject + ' — ' : '') + (q.meta.title || 'Test') + (r.reattempt ? ' (Reattempt — not on leaderboard)' : '') + (r.auto ? (r.autoReason === 'violation' ? ' (auto-submitted: rule violation)' : ' (auto-submitted)') : '');
   document.getElementById('qz-results-score').textContent = r.score;
   document.getElementById('qz-results-outof').textContent = 'out of ' + r.totalMarks;
   const attempted = r.correct + r.wrong;

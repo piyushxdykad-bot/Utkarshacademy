@@ -5621,8 +5621,23 @@ function renderMocksSubjectGroup(containerId, classKey, subjectsData, submission
   const el = document.getElementById(containerId);
   if (!el) return;
   submissionsMap = submissionsMap || {};
+  // Class 11 / Class 12: question-based (MCQ) mocks saved in the admin panel are
+  // listed inside this same Subject Wise section, under their subject.
+  const quizBySubject = {};
+  let hasQuiz = false;
+  if (MOCK_QUIZ_MERGE_CLASSES.indexOf(classKey) !== -1) {
+    _ensureServerAttemptsThenRerender(function () { renderMocksSubjectGroup(containerId, classKey, subjectsData, submissionsMap); });
+    ((MOCK_QUIZZES_DATA && MOCK_QUIZZES_DATA[classKey]) || []).forEach(function (item, idx) {
+      const subj = (item.subject || 'General').trim() || 'General';
+      (quizBySubject[subj.toLowerCase()] = quizBySubject[subj.toLowerCase()] || { label: subj, rows: [] }).rows.push({ item: item, idx: idx });
+      hasQuiz = true;
+    });
+  }
   const subjectNames = Object.keys(subjectsData);
-  if (!subjectNames.length) {
+  const quizOnlyNames = Object.keys(quizBySubject).filter(function (k) {
+    return !subjectNames.some(function (n) { return n.trim().toLowerCase() === k; });
+  });
+  if (!subjectNames.length && !hasQuiz) {
     el.innerHTML = '<div style="text-align:center;padding:20px 10px;color:var(--muted);font-size:13.5px;">'
       + '<i class="fas fa-file-circle-question" style="font-size:30px;color:var(--mid-blue);display:block;margin-bottom:12px;"></i>'
       + 'No mocks have been added for this class yet. Check back soon!'
@@ -5664,10 +5679,19 @@ function renderMocksSubjectGroup(containerId, classKey, subjectsData, submission
         + '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;">' + actionHtml + '</div>'
         + '</div>';
     });
+    const q = quizBySubject[subject.trim().toLowerCase()];
+    if (q) q.rows.forEach(function (row) { html += quizMockRowHtml(classKey, row); });
+    html += '</div></div>';
+  });
+  quizOnlyNames.forEach(function (k) {
+    const q = quizBySubject[k];
+    html += '<div class="mchp-subject"><div class="mchp-subject-title">' + escAttrPublic(q.label) + '</div><div class="mchp-chapter-list">';
+    q.rows.forEach(function (row) { html += quizMockRowHtml(classKey, row); });
     html += '</div></div>';
   });
   el.innerHTML = html;
 }
+const MOCK_QUIZ_MERGE_CLASSES = ['class11', 'class12']; // MCQ mocks shown inside the Subject Wise list
 function escAttrPublic(s) {
   return (s == null ? '' : String(s)).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
@@ -5758,6 +5782,32 @@ function buildTableHtml(rows) {
   return html;
 }
 
+// Builds one question-based mock row (name, meta, Start / View Result / Pay & Unlock).
+function quizMockRowHtml(classKey, row) {
+  let html = '';
+  const item = row.item;
+  const isPaid = item.access === 'paid';
+  const owned = !isPaid || isMockPurchased(classKey, item.subject, item.chapterName);
+  const qCount = (item.questions || []).length;
+  const metaBits = [];
+  if (item.duration) metaBits.push(item.duration + ' min');
+  metaBits.push(qCount + ' Qs');
+  const meta = ' <span style="font-size:10.5px;color:var(--muted);font-weight:600;">(' + metaBits.join(', ') + (isPaid ? ', ' + (owned ? 'Purchased' : 'Paid') : '') + ')</span>';
+  const resultKey = item.subject + '::' + item.chapterName;
+  const testName = _quizTestName(item.subject, item.chapterName);
+  const attempted = owned && (hasAttemptedQuiz('mocks', classKey, resultKey) || !!window._UA_SERVER_ATTEMPTS[testName]);
+  const actionHtml = attempted
+    ? '<button type="button" class="mchp-start-btn mchp-view-btn" onclick="viewQuizResult(\'mocks\', \'' + classKey + '\', \'' + _mchpEsc(resultKey) + '\')"><i class="fas fa-chart-simple"></i> View Result</button>'
+    : owned
+      ? '<button type="button" class="mchp-start-btn" onclick="startQuizMock(\'' + classKey + '\', ' + row.idx + ')"' + (qCount ? '' : ' disabled title="No questions added yet"') + '><i class="fas fa-play"></i> Start</button>'
+      : '<button type="button" class="mchp-buy-btn" onclick="openMockBuyModal(\'' + classKey + '\', \'' + escAttrPublic(item.subject).replace(/'/g, "\\'") + '\', \'' + escAttrPublic(item.chapterName).replace(/'/g, "\\'") + '\', ' + (Number(item.price) || MOCK_PRICE) + ')"><i class="fas fa-lock"></i> Pay ₹' + (Number(item.price) || MOCK_PRICE) + ' &amp; Unlock</button>';
+  html += '<div class="mchp-chapter-row' + (owned ? '' : ' locked') + '">'
+    + '<div class="mchp-chapter-name"><i class="fas ' + (isPaid && !owned ? 'fa-lock' : 'fa-list-ol') + '"></i> ' + escAttrPublic(item.chapterName) + meta + '</div>'
+    + '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;">' + actionHtml + '</div>'
+    + '</div>';
+  return html;
+}
+
 // ===== QUESTION-BASED (CUET) MOCKS -- Subject Wise section =====
 // Renders the admin-authored, question-based CUET mocks (ua_mock_quizzes)
 // grouped by subject, matching the same visual pattern as the PDF-based
@@ -5794,26 +5844,7 @@ function renderQuizSubjectGroup(containerId, classKey, items, mockType) {
   Object.keys(grouped).forEach(function (subject) {
     html += '<div class="mchp-subject"><div class="mchp-subject-title">' + escAttrPublic(subject) + '</div><div class="mchp-chapter-list">';
     grouped[subject].forEach(function (row) {
-      const item = row.item;
-      const isPaid = item.access === 'paid';
-      const owned = !isPaid || isMockPurchased(classKey, item.subject, item.chapterName);
-      const qCount = (item.questions || []).length;
-      const metaBits = [];
-      if (item.duration) metaBits.push(item.duration + ' min');
-      metaBits.push(qCount + ' Qs');
-      const meta = ' <span style="font-size:10.5px;color:var(--muted);font-weight:600;">(' + metaBits.join(', ') + (isPaid ? ', ' + (owned ? 'Purchased' : 'Paid') : '') + ')</span>';
-      const resultKey = item.subject + '::' + item.chapterName;
-      const testName = _quizTestName(item.subject, item.chapterName);
-      const attempted = owned && (hasAttemptedQuiz('mocks', classKey, resultKey) || !!window._UA_SERVER_ATTEMPTS[testName]);
-      const actionHtml = attempted
-        ? '<button type="button" class="mchp-start-btn mchp-view-btn" onclick="viewQuizResult(\'mocks\', \'' + classKey + '\', \'' + _mchpEsc(resultKey) + '\')"><i class="fas fa-chart-simple"></i> View Result</button>'
-        : owned
-          ? '<button type="button" class="mchp-start-btn" onclick="startQuizMock(\'' + classKey + '\', ' + row.idx + ')"' + (qCount ? '' : ' disabled title="No questions added yet"') + '><i class="fas fa-play"></i> Start</button>'
-          : '<button type="button" class="mchp-buy-btn" onclick="openMockBuyModal(\'' + classKey + '\', \'' + escAttrPublic(item.subject).replace(/'/g, "\\'") + '\', \'' + escAttrPublic(item.chapterName).replace(/'/g, "\\'") + '\', ' + (Number(item.price) || MOCK_PRICE) + ')"><i class="fas fa-lock"></i> Pay ₹' + (Number(item.price) || MOCK_PRICE) + ' &amp; Unlock</button>';
-      html += '<div class="mchp-chapter-row' + (owned ? '' : ' locked') + '">'
-        + '<div class="mchp-chapter-name"><i class="fas ' + (isPaid && !owned ? 'fa-lock' : 'fa-list-ol') + '"></i> ' + escAttrPublic(item.chapterName) + meta + '</div>'
-        + '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;">' + actionHtml + '</div>'
-        + '</div>';
+      html += quizMockRowHtml(classKey, row);
     });
     html += '</div></div>';
   });
@@ -5925,20 +5956,6 @@ function renderPreviousDoseSection(containerId, classKey, items, icon) {
   el.innerHTML = html;
 }
 
-// Shows the admin-authored question-based mocks (ua_mock_quizzes) for Class 11 / Class 12
-// under the PDF mocks. Each wrapper only appears when that class actually has tests of that type.
-function renderClassQuizSections(prefix, classKey) {
-  const items = (MOCK_QUIZZES_DATA && MOCK_QUIZZES_DATA[classKey]) || [];
-  const hasType = function (t) { return items.some(function (i) { return (i.mockType === 'chapterwise' ? 'chapterwise' : 'subjectwise') === t; }); };
-  const subWrap = document.getElementById(prefix + '-quiz-subjectwise-wrap');
-  const chWrap = document.getElementById(prefix + '-quiz-topicwise-wrap');
-  const hasSub = hasType('subjectwise'), hasCh = hasType('chapterwise');
-  if (subWrap) subWrap.style.display = hasSub ? '' : 'none';
-  if (chWrap) chWrap.style.display = hasCh ? '' : 'none';
-  if (hasSub) renderQuizSubjectGroup(prefix + '-quiz-subjectwise-body', classKey, items, 'subjectwise');
-  if (hasCh) renderQuizSubjectGroup(prefix + '-quiz-topicwise-body', classKey, items, 'chapterwise');
-}
-
 // Fetches and renders the live Mocks library for a class's Mocks page.
 async function renderMocksPageSection(classKey) {
   const prefix = mocksPagePrefix(classKey);
@@ -5962,7 +5979,6 @@ async function renderMocksPageSection(classKey) {
   } else {
     const grouped = await fetchLibraryGroupedBySubject('mocks', classKey);
     renderMocksSubjectGroup(prefix + '-subjectwise-body', classKey, grouped, submissionsMap);
-    renderClassQuizSections(prefix + '', classKey);
   }
   renderDaydMocksSection(prefix + '-dayd-body', classKey, DAYD_MOCKS_DATA[classKey] || [], 'fa-bolt', true);
   renderPreviousDoseSection(prefix + '-previousdose-body', classKey, DAYD_MOCKS_DATA[classKey] || [], 'fa-clock-rotate-left');
@@ -7132,7 +7148,6 @@ async function renderC11HubPage() {
     fetchMySubmissionsMap('class11')
   ]);
   renderMocksSubjectGroup('c11h-subjectwise-mocks-body', 'class11', filterGroupedBySubjects(mocksGrouped, subjects), submissionsMap);
-  renderClassQuizSections('c11h', 'class11');
   renderNotesSubjectGroup('c11h-subjectwise-notes-body', 'class11', filterGroupedBySubjects(notesGrouped, subjects));
 
   if (!window._UA_NOTE_STATE.class11) window._UA_NOTE_STATE.class11 = { color: UAN_COLORS[0], editingId: null };
@@ -7163,7 +7178,6 @@ async function renderC12HubPage() {
     fetchMySubmissionsMap('class12')
   ]);
   renderMocksSubjectGroup('c12h-subjectwise-mocks-body', 'class12', filterGroupedBySubjects(mocksGrouped, subjects), submissionsMap);
-  renderClassQuizSections('c12h', 'class12');
   renderNotesSubjectGroup('c12h-subjectwise-notes-body', 'class12', filterGroupedBySubjects(notesGrouped, subjects));
 
   if (!window._UA_NOTE_STATE.class12) window._UA_NOTE_STATE.class12 = { color: UAN_COLORS[0], editingId: null };
@@ -7908,14 +7922,6 @@ async function handleRegister() {
               <h3 class="mocks-page-section-title"><i class="fas fa-layer-group"></i> Subject Wise Mocks</h3>
               <div id="c11h-subjectwise-mocks-body"></div>
             </div>
-            <div class="mocks-page-section fade-up" id="c11h-quiz-subjectwise-wrap" style="display:none;">
-              <h3 class="mocks-page-section-title"><i class="fas fa-list-ol"></i> Question-Based Subject Wise Mocks</h3>
-              <div id="c11h-quiz-subjectwise-body"></div>
-            </div>
-            <div class="mocks-page-section fade-up" id="c11h-quiz-topicwise-wrap" style="display:none;">
-              <h3 class="mocks-page-section-title"><i class="fas fa-list-check"></i> Question-Based Chapter Wise Mocks</h3>
-              <div id="c11h-quiz-topicwise-body"></div>
-            </div>
           </div>
 
           <!-- 3. LIVE MOCKS -->
@@ -8024,14 +8030,6 @@ async function handleRegister() {
             <div class="mocks-page-section fade-up">
               <h3 class="mocks-page-section-title"><i class="fas fa-layer-group"></i> Subject Wise Mocks</h3>
               <div id="c12h-subjectwise-mocks-body"></div>
-            </div>
-            <div class="mocks-page-section fade-up" id="c12h-quiz-subjectwise-wrap" style="display:none;">
-              <h3 class="mocks-page-section-title"><i class="fas fa-list-ol"></i> Question-Based Subject Wise Mocks</h3>
-              <div id="c12h-quiz-subjectwise-body"></div>
-            </div>
-            <div class="mocks-page-section fade-up" id="c12h-quiz-topicwise-wrap" style="display:none;">
-              <h3 class="mocks-page-section-title"><i class="fas fa-list-check"></i> Question-Based Chapter Wise Mocks</h3>
-              <div id="c12h-quiz-topicwise-body"></div>
             </div>
           </div>
 
@@ -8541,14 +8539,6 @@ async function handleRegister() {
               <h3 class="mocks-page-section-title"><i class="fas fa-layer-group"></i> Subject Wise Mocks</h3>
               <div id="c11m-subjectwise-body"></div>
             </div>
-            <div class="mocks-page-section fade-up" id="c11m-quiz-subjectwise-wrap" style="display:none;">
-              <h3 class="mocks-page-section-title"><i class="fas fa-list-ol"></i> Question-Based Subject Wise Mocks</h3>
-              <div id="c11m-quiz-subjectwise-body"></div>
-            </div>
-            <div class="mocks-page-section fade-up" id="c11m-quiz-topicwise-wrap" style="display:none;">
-              <h3 class="mocks-page-section-title"><i class="fas fa-list-check"></i> Question-Based Chapter Wise Mocks</h3>
-              <div id="c11m-quiz-topicwise-body"></div>
-            </div>
           </div>
           <div class="mocks-slider-panel">
             <div class="mocks-page-section fade-up">
@@ -8663,14 +8653,6 @@ async function handleRegister() {
             <div class="mocks-page-section fade-up">
               <h3 class="mocks-page-section-title"><i class="fas fa-layer-group"></i> Subject Wise Mocks</h3>
               <div id="c12m-subjectwise-body"></div>
-            </div>
-            <div class="mocks-page-section fade-up" id="c12m-quiz-subjectwise-wrap" style="display:none;">
-              <h3 class="mocks-page-section-title"><i class="fas fa-list-ol"></i> Question-Based Subject Wise Mocks</h3>
-              <div id="c12m-quiz-subjectwise-body"></div>
-            </div>
-            <div class="mocks-page-section fade-up" id="c12m-quiz-topicwise-wrap" style="display:none;">
-              <h3 class="mocks-page-section-title"><i class="fas fa-list-check"></i> Question-Based Chapter Wise Mocks</h3>
-              <div id="c12m-quiz-topicwise-body"></div>
             </div>
           </div>
           <div class="mocks-slider-panel">

@@ -5925,6 +5925,20 @@ function renderPreviousDoseSection(containerId, classKey, items, icon) {
   el.innerHTML = html;
 }
 
+// Shows the admin-authored question-based mocks (ua_mock_quizzes) for Class 11 / Class 12
+// under the PDF mocks. Each wrapper only appears when that class actually has tests of that type.
+function renderClassQuizSections(prefix, classKey) {
+  const items = (MOCK_QUIZZES_DATA && MOCK_QUIZZES_DATA[classKey]) || [];
+  const hasType = function (t) { return items.some(function (i) { return (i.mockType === 'chapterwise' ? 'chapterwise' : 'subjectwise') === t; }); };
+  const subWrap = document.getElementById(prefix + '-quiz-subjectwise-wrap');
+  const chWrap = document.getElementById(prefix + '-quiz-topicwise-wrap');
+  const hasSub = hasType('subjectwise'), hasCh = hasType('chapterwise');
+  if (subWrap) subWrap.style.display = hasSub ? '' : 'none';
+  if (chWrap) chWrap.style.display = hasCh ? '' : 'none';
+  if (hasSub) renderQuizSubjectGroup(prefix + '-quiz-subjectwise-body', classKey, items, 'subjectwise');
+  if (hasCh) renderQuizSubjectGroup(prefix + '-quiz-topicwise-body', classKey, items, 'chapterwise');
+}
+
 // Fetches and renders the live Mocks library for a class's Mocks page.
 async function renderMocksPageSection(classKey) {
   const prefix = mocksPagePrefix(classKey);
@@ -5935,8 +5949,8 @@ async function renderMocksPageSection(classKey) {
   const submissionsMap = await fetchMySubmissionsMap(classKey);
 
   // CUET uses question-based tests (MCQs, timer) instead of PDF chapters —
-  // Class 11 / Class 12 (and the board-pattern half of Class 12+CUET) still
-  // use PDF chapters from the "mocks" table.
+  // Class 11 / Class 12 / Class 12+CUET use PDF chapters from the "mocks" table;
+  // Class 11 / Class 12 also show any question-based tests below the PDFs.
   if (classKey === 'cuet') {
     renderQuizSubjectGroup(prefix + '-subjectwise-body', classKey, MOCK_QUIZZES_DATA.cuet || [], 'subjectwise');
     renderQuizSubjectGroup(prefix + '-topicwise-body', classKey, MOCK_QUIZZES_DATA.cuet || [], 'chapterwise');
@@ -5948,6 +5962,7 @@ async function renderMocksPageSection(classKey) {
   } else {
     const grouped = await fetchLibraryGroupedBySubject('mocks', classKey);
     renderMocksSubjectGroup(prefix + '-subjectwise-body', classKey, grouped, submissionsMap);
+    renderClassQuizSections(prefix + '', classKey);
   }
   renderDaydMocksSection(prefix + '-dayd-body', classKey, DAYD_MOCKS_DATA[classKey] || [], 'fa-bolt', true);
   renderPreviousDoseSection(prefix + '-previousdose-body', classKey, DAYD_MOCKS_DATA[classKey] || [], 'fa-clock-rotate-left');
@@ -7117,6 +7132,7 @@ async function renderC11HubPage() {
     fetchMySubmissionsMap('class11')
   ]);
   renderMocksSubjectGroup('c11h-subjectwise-mocks-body', 'class11', filterGroupedBySubjects(mocksGrouped, subjects), submissionsMap);
+  renderClassQuizSections('c11h', 'class11');
   renderNotesSubjectGroup('c11h-subjectwise-notes-body', 'class11', filterGroupedBySubjects(notesGrouped, subjects));
 
   if (!window._UA_NOTE_STATE.class11) window._UA_NOTE_STATE.class11 = { color: UAN_COLORS[0], editingId: null };
@@ -7147,6 +7163,7 @@ async function renderC12HubPage() {
     fetchMySubmissionsMap('class12')
   ]);
   renderMocksSubjectGroup('c12h-subjectwise-mocks-body', 'class12', filterGroupedBySubjects(mocksGrouped, subjects), submissionsMap);
+  renderClassQuizSections('c12h', 'class12');
   renderNotesSubjectGroup('c12h-subjectwise-notes-body', 'class12', filterGroupedBySubjects(notesGrouped, subjects));
 
   if (!window._UA_NOTE_STATE.class12) window._UA_NOTE_STATE.class12 = { color: UAN_COLORS[0], editingId: null };
@@ -7891,6 +7908,14 @@ async function handleRegister() {
               <h3 class="mocks-page-section-title"><i class="fas fa-layer-group"></i> Subject Wise Mocks</h3>
               <div id="c11h-subjectwise-mocks-body"></div>
             </div>
+            <div class="mocks-page-section fade-up" id="c11h-quiz-subjectwise-wrap" style="display:none;">
+              <h3 class="mocks-page-section-title"><i class="fas fa-list-ol"></i> Question-Based Subject Wise Mocks</h3>
+              <div id="c11h-quiz-subjectwise-body"></div>
+            </div>
+            <div class="mocks-page-section fade-up" id="c11h-quiz-topicwise-wrap" style="display:none;">
+              <h3 class="mocks-page-section-title"><i class="fas fa-list-check"></i> Question-Based Chapter Wise Mocks</h3>
+              <div id="c11h-quiz-topicwise-body"></div>
+            </div>
           </div>
 
           <!-- 3. LIVE MOCKS -->
@@ -7999,6 +8024,14 @@ async function handleRegister() {
             <div class="mocks-page-section fade-up">
               <h3 class="mocks-page-section-title"><i class="fas fa-layer-group"></i> Subject Wise Mocks</h3>
               <div id="c12h-subjectwise-mocks-body"></div>
+            </div>
+            <div class="mocks-page-section fade-up" id="c12h-quiz-subjectwise-wrap" style="display:none;">
+              <h3 class="mocks-page-section-title"><i class="fas fa-list-ol"></i> Question-Based Subject Wise Mocks</h3>
+              <div id="c12h-quiz-subjectwise-body"></div>
+            </div>
+            <div class="mocks-page-section fade-up" id="c12h-quiz-topicwise-wrap" style="display:none;">
+              <h3 class="mocks-page-section-title"><i class="fas fa-list-check"></i> Question-Based Chapter Wise Mocks</h3>
+              <div id="c12h-quiz-topicwise-body"></div>
             </div>
           </div>
 
@@ -8508,6 +8541,14 @@ async function handleRegister() {
               <h3 class="mocks-page-section-title"><i class="fas fa-layer-group"></i> Subject Wise Mocks</h3>
               <div id="c11m-subjectwise-body"></div>
             </div>
+            <div class="mocks-page-section fade-up" id="c11m-quiz-subjectwise-wrap" style="display:none;">
+              <h3 class="mocks-page-section-title"><i class="fas fa-list-ol"></i> Question-Based Subject Wise Mocks</h3>
+              <div id="c11m-quiz-subjectwise-body"></div>
+            </div>
+            <div class="mocks-page-section fade-up" id="c11m-quiz-topicwise-wrap" style="display:none;">
+              <h3 class="mocks-page-section-title"><i class="fas fa-list-check"></i> Question-Based Chapter Wise Mocks</h3>
+              <div id="c11m-quiz-topicwise-body"></div>
+            </div>
           </div>
           <div class="mocks-slider-panel">
             <div class="mocks-page-section fade-up">
@@ -8622,6 +8663,14 @@ async function handleRegister() {
             <div class="mocks-page-section fade-up">
               <h3 class="mocks-page-section-title"><i class="fas fa-layer-group"></i> Subject Wise Mocks</h3>
               <div id="c12m-subjectwise-body"></div>
+            </div>
+            <div class="mocks-page-section fade-up" id="c12m-quiz-subjectwise-wrap" style="display:none;">
+              <h3 class="mocks-page-section-title"><i class="fas fa-list-ol"></i> Question-Based Subject Wise Mocks</h3>
+              <div id="c12m-quiz-subjectwise-body"></div>
+            </div>
+            <div class="mocks-page-section fade-up" id="c12m-quiz-topicwise-wrap" style="display:none;">
+              <h3 class="mocks-page-section-title"><i class="fas fa-list-check"></i> Question-Based Chapter Wise Mocks</h3>
+              <div id="c12m-quiz-topicwise-body"></div>
             </div>
           </div>
           <div class="mocks-slider-panel">
